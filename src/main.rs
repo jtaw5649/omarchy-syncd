@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::process::Command;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -174,5 +175,19 @@ fn cmd_restore() -> Result<()> {
         .context("Failed to clone repository")?;
     fs_ops::restore(&cfg.files.paths, &repo_dir)?;
     println!("Restore complete.");
+
+    match Command::new("hyprctl").arg("reload").status() {
+        Ok(status) if status.success() => println!("hyprctl reload executed."),
+        Ok(status) => println!(
+            "hyprctl reload exited with status {:?}; continuing.",
+            status.code()
+        ),
+        Err(err) => {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                println!("hyprctl reload failed: {}", err);
+            }
+        }
+    }
+
     Ok(())
 }
