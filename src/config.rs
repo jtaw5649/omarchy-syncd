@@ -1,0 +1,77 @@
+use std::{fs, path::PathBuf};
+
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+
+const CONFIG_DIR_NAME: &str = "omarchy-syncd";
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RepoConfig {
+    pub url: String,
+    #[serde(default = "default_branch")]
+    pub branch: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FileConfig {
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SyncConfig {
+    pub repo: RepoConfig,
+    pub files: FileConfig,
+}
+
+impl SyncConfig {
+    pub fn ensure_non_empty_paths(&self) -> Result<()> {
+        if self.files.paths.is_empty() {
+            anyhow::bail!(
+                "No paths configured. Run 'omarchy-syncd init --path <path>' or rerun init with --include-defaults."
+            );
+        }
+        Ok(())
+    }
+}
+
+pub fn default_branch() -> String {
+    "main".to_string()
+}
+
+pub fn config_dir() -> Result<PathBuf> {
+    let base = if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        PathBuf::from(xdg)
+    } else {
+        let home = std::env::var_os("HOME").context("HOME environment variable not set")?;
+        PathBuf::from(home).join(".config")
+    };
+    Ok(base.join(CONFIG_DIR_NAME))
+}
+
+pub fn config_file_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("config.toml"))
+}
+
+pub fn load_config() -> Result<SyncConfig> {
+    let path = config_file_path()?;
+    let raw = fs::read_to_string(&path).with_context(|| {
+        format!(
+            "Missing config at {}. Run 'omarchy-syncd init'.",
+            path.display()
+        )
+    })?;
+    let cfg: SyncConfig = toml::from_str(&raw)
+        .with_context(|| format!("Failed to parse config TOML at {}", path.display()))?;
+    Ok(cfg)
+}
+
+pub fn write_config(cfg: &SyncConfig) -> Result<()> {
+    let dir = config_dir()?;
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("Failed to create config directory {}", dir.display()))?;
+    let raw = toml::to_string_pretty(cfg)?;
+    let path = dir.join("config.toml");
+    fs::write(&path, raw)
+        .with_context(|| format!("Failed to write config file {}", path.display()))?;
+    Ok(())
+}
