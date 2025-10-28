@@ -12,7 +12,8 @@ use walkdir::WalkDir;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 
-const SYMLINK_METADATA_DIR: &str = ".omarchy-syncd";
+const REPO_METADATA_DIR: &str = ".config/omarchy-syncd";
+const LEGACY_METADATA_DIR: &str = ".omarchy-syncd";
 const SYMLINK_METADATA_FILE: &str = "symlinks.json";
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -53,9 +54,19 @@ fn ensure_parent(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn metadata_path(repo_dir: &Path) -> PathBuf {
+fn repo_metadata_path(repo_dir: &Path) -> PathBuf {
+    repo_dir.join(REPO_METADATA_DIR).join(SYMLINK_METADATA_FILE)
+}
+
+fn user_metadata_path() -> Result<PathBuf> {
+    Ok(home_dir()?
+        .join(".config/omarchy-syncd")
+        .join(SYMLINK_METADATA_FILE))
+}
+
+fn legacy_metadata_path(repo_dir: &Path) -> PathBuf {
     repo_dir
-        .join(SYMLINK_METADATA_DIR)
+        .join(LEGACY_METADATA_DIR)
         .join(SYMLINK_METADATA_FILE)
 }
 
@@ -225,10 +236,18 @@ pub fn snapshot(paths: &[String], repo_dir: &Path) -> Result<()> {
         }
     }
 
-    let meta_path = metadata_path(repo_dir);
+    let meta_path = repo_metadata_path(repo_dir);
+    let legacy_meta = legacy_metadata_path(repo_dir);
+
     if symlink_entries.is_empty() {
         if meta_path.exists() {
             let _ = fs::remove_file(&meta_path);
+        }
+        if legacy_meta.exists() {
+            let _ = fs::remove_file(&legacy_meta);
+            if let Some(parent) = legacy_meta.parent() {
+                let _ = fs::remove_dir(parent);
+            }
         }
     } else {
         if let Some(parent) = meta_path.parent() {
@@ -239,6 +258,12 @@ pub fn snapshot(paths: &[String], repo_dir: &Path) -> Result<()> {
         let data = serde_json::to_vec_pretty(&symlink_entries)?;
         fs::write(&meta_path, data)
             .with_context(|| format!("Failed writing symlink metadata {}", meta_path.display()))?;
+        if legacy_meta.exists() {
+            let _ = fs::remove_file(&legacy_meta);
+            if let Some(parent) = legacy_meta.parent() {
+                let _ = fs::remove_dir(parent);
+            }
+        }
     }
 
     Ok(())
@@ -281,10 +306,23 @@ pub fn restore(paths: &[String], repo_dir: &Path) -> Result<()> {
         }
     }
 
-    let meta_path = metadata_path(repo_dir);
-    if meta_path.exists() {
+    let meta_path = repo_metadata_path(repo_dir);
+    let legacy_meta = legacy_metadata_path(repo_dir);
+
+    let (metadata_source, data_opt) = if meta_path.exists() {
         let data = fs::read_to_string(&meta_path)
             .with_context(|| format!("Failed reading symlink metadata {}", meta_path.display()))?;
+        (Some(meta_path.clone()), Some(data))
+    } else if legacy_meta.exists() {
+        let data = fs::read_to_string(&legacy_meta).with_context(|| {
+            format!("Failed reading symlink metadata {}", legacy_meta.display())
+        })?;
+        (Some(legacy_meta.clone()), Some(data))
+    } else {
+        (None, None)
+    };
+
+    if let Some(data) = data_opt {
         let entries: Vec<SymlinkEntry> =
             serde_json::from_str(&data).with_context(|| "Failed parsing symlink metadata")?;
         let home = home_dir()?;
@@ -340,6 +378,24 @@ pub fn restore(paths: &[String], repo_dir: &Path) -> Result<()> {
                             resolved_target.display()
                         )
                     })?;
+                }
+            }
+        }
+
+        let user_meta = user_metadata_path()?;
+        if let Some(parent) = user_meta.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed creating metadata directory {}", parent.display())
+            })?;
+        }
+        fs::write(&user_meta, data)
+            .with_context(|| format!("Failed writing symlink metadata {}", user_meta.display()))?;
+
+        if let Some(path) = metadata_source {
+            if path == legacy_meta {
+                let _ = fs::remove_file(&legacy_meta);
+                if let Some(parent) = legacy_meta.parent() {
+                    let _ = fs::remove_dir(parent);
                 }
             }
         }

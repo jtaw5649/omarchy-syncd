@@ -248,7 +248,7 @@ fn backup_and_restore_roundtrip() -> Result<()> {
         target: String,
         is_dir: bool,
     }
-    let symlink_metadata_path = checkout.join(".omarchy-syncd/symlinks.json");
+    let symlink_metadata_path = checkout.join(".config/omarchy-syncd/symlinks.json");
     assert!(symlink_metadata_path.exists());
     let metadata_contents = fs::read_to_string(&symlink_metadata_path)?;
     let recorded: Vec<RecordedSymlink> = serde_json::from_str(&metadata_contents)?;
