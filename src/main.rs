@@ -1,10 +1,13 @@
 use std::collections::{BTreeSet, HashSet};
+use std::env;
+use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::process::Command;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use tempfile::tempdir;
+use which::which;
 
 use omarchy_syncd::{
     bundles, config, fs_ops, git,
@@ -35,6 +38,10 @@ enum Commands {
     Restore(RestoreArgs),
     /// Launch the interactive selector to choose bundles and dotfiles.
     Install(InstallArgs),
+    /// Open the high-level omarchy-syncd menu.
+    Menu,
+    /// Inspect or edit the configuration file.
+    Config(ConfigArgs),
 }
 
 #[derive(Args)]
@@ -110,6 +117,19 @@ struct RestoreArgs {
     no_ui: bool,
 }
 
+#[derive(Args)]
+struct ConfigArgs {
+    /// Launch the given editor instead of $EDITOR.
+    #[arg(long)]
+    editor: Option<String>,
+    /// Print the on-disk config path and exit.
+    #[arg(long = "print-path")]
+    print_path: bool,
+    /// Create an empty config file if it is missing.
+    #[arg(long = "create")]
+    create: bool,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -118,6 +138,8 @@ fn main() -> Result<()> {
         Commands::Backup(args) => cmd_backup(args),
         Commands::Restore(args) => cmd_restore(args),
         Commands::Install(args) => cmd_install(args),
+        Commands::Menu => cmd_menu(),
+        Commands::Config(args) => cmd_config(args),
     }
 }
 
@@ -381,6 +403,79 @@ fn cmd_install(args: InstallArgs) -> Result<()> {
     Ok(())
 }
 
+fn cmd_menu() -> Result<()> {
+    let header = "Enter: run • Esc: cancel";
+    let choices = vec![
+        Choice {
+            id: "install".to_string(),
+            label: "Install – Configure tracked bundles or paths".to_string(),
+        },
+        Choice {
+            id: "backup".to_string(),
+            label: "Backup – Snapshot selected dotfiles to the remote".to_string(),
+        },
+        Choice {
+            id: "restore".to_string(),
+            label: "Restore – Pull tracked dotfiles back into $HOME".to_string(),
+        },
+        Choice {
+            id: "config".to_string(),
+            label: "Edit Config – Open config.toml in your editor".to_string(),
+        },
+    ];
+
+    let selection = selector::single_select("Omarchy Sync >", header, &choices)?;
+    match selection.as_str() {
+        "install" => run_subcommand(&["install"]),
+        "backup" => run_subcommand(&["backup"]),
+        "restore" => run_subcommand(&["restore"]),
+        "config" => run_subcommand(&["config"]),
+        other => anyhow::bail!("Unknown selection {other}"),
+    }
+}
+
+fn cmd_config(args: ConfigArgs) -> Result<()> {
+    let config_path = config::config_file_path()?;
+
+    if args.print_path {
+        println!("{}", config_path.display());
+        return Ok(());
+    }
+
+    if !config_path.exists() {
+        if args.create {
+            if let Some(parent) = config_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            if !config_path.exists() {
+                fs::write(&config_path, b"# omarchy-syncd configuration\n")?;
+            }
+        } else {
+            anyhow::bail!(
+                "Config not found at {}. Run 'omarchy-syncd init' first or rerun with --create.",
+                config_path.display()
+            );
+        }
+    }
+
+    let editor = args
+        .editor
+        .or_else(|| env::var("EDITOR").ok())
+        .or_else(|| env::var("VISUAL").ok())
+        .or_else(find_default_editor)
+        .ok_or_else(|| anyhow::anyhow!("No editor found. Set $EDITOR or pass --editor <cmd>."))?;
+
+    let status = Command::new(&editor)
+        .arg(&config_path)
+        .status()
+        .with_context(|| format!("Failed launching editor '{editor}'"))?;
+    if !status.success() {
+        anyhow::bail!("Editor '{}' exited with status {:?}", editor, status.code());
+    }
+
+    Ok(())
+}
+
 struct SelectionResult {
     bundles: Vec<String>,
     paths: Vec<String>,
@@ -462,6 +557,33 @@ fn normalize_paths(paths: Vec<String>) -> Vec<String> {
         .filter(|p| !p.is_empty())
         .collect();
     set.into_iter().collect()
+}
+
+fn run_subcommand(args: &[&str]) -> Result<()> {
+    let exe = env::current_exe().context("Failed to locate omarchy-syncd executable")?;
+    let status = Command::new(exe)
+        .args(args)
+        .status()
+        .with_context(|| format!("Failed to execute subcommand {:?}", args))?;
+    if status.success() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "Subcommand {:?} exited with status {:?}",
+            args,
+            status.code()
+        );
+    }
+}
+
+fn find_default_editor() -> Option<String> {
+    const CANDIDATES: &[&str] = &["nano", "vi", "vim", "nvim", "code", "gedit"];
+    for candidate in CANDIDATES {
+        if which(candidate).is_ok() {
+            return Some(candidate.to_string());
+        }
+    }
+    None
 }
 
 fn prompt_yes_no(question: &str) -> Result<bool> {

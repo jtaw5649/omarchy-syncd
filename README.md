@@ -29,9 +29,11 @@ The installer requires Rust’s toolchain (`cargo`), `git`, and a POSIX shell at
 ### Commands
 
 - `init` – writes `~/.config/omarchy-syncd/config.toml`. Repeat `--path` to track multiple files or directories. Add `--bundle <id>` (repeat as needed) or `--include-defaults` to prefill the Omarchy bundles (Hypr, Waybar, Omarchy, Alacritty, Ghostty, Kitty, btop, fastfetch, Neovim, Walker, SwayOSD, eza, cava, aether, elephant, wayvnc, systemd, Typora, gh). Pass `--interactive` to launch the selector UI (Tab to toggle, Enter to confirm) and `--verify-remote` if you want to check the remote branch immediately.
+- `menu` – lightweight launcher UI with entries for Install, Backup, Restore, and Edit Config. This is what the wrapper scripts expose.
 - `backup` – clones the remote repo to a temporary directory, lets you choose which of the configured paths to include, then copies them, commits, and pushes. Use `--all`, `--no-ui`, or `--path <…>` to skip the selector in scripts. If there are no changes it exits cleanly without pushing.
 - `restore` – clones the remote repo to a temporary directory, lets you pick which tracked paths to restore, and copies them back into `$HOME` (overwriting existing files/directories). Use `--all`, `--no-ui`, or `--path <…>` to bypass the selector.
-- `install` – launches the multi-select installer so you can choose bundles and extra dotfiles (also usable non-interactively with `--bundle`, `--path`, and `--dry-run`). This is the command to bind to Hyprland or Walker launchers.
+- `install` – launches the multi-select installer so you can choose bundles and extra dotfiles (also usable non-interactively with `--bundle`, `--path`, and `--dry-run`).
+- `config` – prints or opens `~/.config/omarchy-syncd/config.toml`. Add `--print-path` to avoid launching an editor.
 
 ### Default path bundle
 
@@ -73,14 +75,14 @@ paths = [
 - Repositories are cloned into a temporary directory for each run, so there is no long-lived local staging area—your private GitHub repository is the source of truth.
 - Symlink information (for example `~/.config/omarchy/current/theme`) is stored inside the backup at `.config/omarchy-syncd/symlinks.json`, and `restore` writes a copy to `~/.config/omarchy-syncd/symlinks.json` on each machine so theme links stay intact. **Do not delete this JSON file**—without it, Omarchy theme symlinks and other link-based configs cannot be reconstructed during `restore`.
 - After `restore` completes the tool runs `hyprctl reload` (if available) to pick up the updated configuration.
-- The helper script `scripts/omarchy-syncd-menu.sh` simply executes `omarchy-syncd install`; wire it to Super+Alt+Space (or your preferred launcher) to mirror the Omarchy desktop workflow.
+- The helper script `scripts/omarchy-syncd-menu.sh` launches `omarchy-syncd menu`; wire it to Super+Alt+Space (or your preferred launcher) to mirror the Omarchy desktop workflow. The installer can add the Walker entry for you, or use the snippet below.
 - **Launcher integration:**
-  - *Walker:* Add a command entry to `~/.config/walker/config.toml` (create the file if it does not exist):
+  - *Walker:* Add a command entry to `~/.config/walker/config.toml` (create the file if it does not exist). Adjust the path if you installed somewhere other than `~/.local/bin`:
     ```toml
     [[commands]]
     name = "Omarchy Sync"
-    exec = "bash -lc 'omarchy-syncd install'"
+    exec = "~/.local/bin/omarchy-syncd-menu.sh"
     category = "Setup"
     ```
     Restart Walker (or reload its config) and the entry will appear in the Install menu.
-  - *Hyprland:* Bind `scripts/omarchy-syncd-menu.sh` (or `omarchy-syncd install`) to your preferred key combination, e.g. Super+Alt+Space.
+  - *Hyprland:* Bind `scripts/omarchy-syncd-menu.sh` (or `omarchy-syncd menu`) to your preferred key combination, e.g. Super+Alt+Space.

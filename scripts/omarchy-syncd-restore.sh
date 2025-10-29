@@ -7,4 +7,4 @@ if [[ ! -x "$BIN" ]]; then
   BIN="omarchy-syncd"
 fi
 
-exec "$BIN" menu "$@"
+exec "$BIN" restore "$@"

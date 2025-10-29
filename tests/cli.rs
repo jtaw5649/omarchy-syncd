@@ -531,6 +531,39 @@ fn restore_respects_path_flag() -> Result<()> {
 }
 
 #[test]
+fn config_prints_path() -> Result<()> {
+    let temp = tempdir()?;
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home)?;
+
+    let remote = init_remote_repo(temp.path(), "remote-config.git")?;
+
+    base_command(&home)
+        .args([
+            "init",
+            "--repo-url",
+            path_str(&remote)?,
+            "--path",
+            "~/.config/hypr",
+        ])
+        .assert()
+        .success();
+
+    let output = base_command(&home)
+        .args(["config", "--print-path"])
+        .output()
+        .context("failed to run config --print-path")?;
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(
+        stdout.contains(".config/omarchy-syncd/config.toml"),
+        "config path should be printed"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn backup_initializes_empty_remote() -> Result<()> {
     let temp = tempdir()?;
     let home = temp.path().join("home");

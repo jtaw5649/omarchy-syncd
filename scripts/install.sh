@@ -57,6 +57,18 @@ cargo build --release --manifest-path "$PROJECT_ROOT/Cargo.toml"
 mkdir -p "$TARGET_DIR"
 cp "$BUILD_TARGET" "$TARGET_DIR/"
 
+HELPER_SCRIPTS=(
+  "omarchy-syncd-menu.sh"
+  "omarchy-syncd-install.sh"
+  "omarchy-syncd-backup.sh"
+  "omarchy-syncd-restore.sh"
+  "omarchy-syncd-config.sh"
+)
+for helper in "${HELPER_SCRIPTS[@]}"; do
+  cp "$PROJECT_ROOT/scripts/$helper" "$TARGET_DIR/"
+  chmod +x "$TARGET_DIR/$helper"
+done
+
 echo "Installed $BIN_NAME to $TARGET_DIR"
 echo
 echo "Make sure $TARGET_DIR is on your PATH. You can check with:"
@@ -258,8 +270,35 @@ if [ $init_status -eq 0 ]; then
     echo
     echo "Input closed unexpectedly; skipping initial backup. Run 'omarchy-syncd backup' later."
   else
+  echo
+  echo "Skipping initial backup. Run 'omarchy-syncd backup' whenever you're ready."
+  fi
+
+  ask_yes_no "Add a Walker launcher entry for omarchy-syncd?"
+  walker_status=$?
+  if [ $walker_status -eq 0 ]; then
+    WALKER_CONFIG="$HOME/.config/walker/config.toml"
+    mkdir -p "$(dirname "$WALKER_CONFIG")"
+    if ! grep -Fq "$TARGET_DIR/omarchy-syncd-menu.sh" "$WALKER_CONFIG" 2>/dev/null; then
+      {
+        [ -s "$WALKER_CONFIG" ] && echo
+        cat <<WALKER_ENTRY
+[[commands]]
+name = "Omarchy Sync"
+exec = "$TARGET_DIR/omarchy-syncd-menu.sh"
+category = "Setup"
+WALKER_ENTRY
+      } >>"$WALKER_CONFIG"
+      echo "Added Walker command to $WALKER_CONFIG."
+    else
+      echo "Walker configuration already contains an omarchy-syncd entry; skipping."
+    fi
+  elif [ $walker_status -eq 2 ]; then
     echo
-    echo "Skipping initial backup. Run 'omarchy-syncd backup' whenever you're ready."
+    echo "Input closed unexpectedly; skipping Walker configuration.";
+  else
+    echo
+    echo "Skipping Walker integration. You can add it later in ~/.config/walker/config.toml."
   fi
 elif [ $init_status -eq 2 ]; then
   echo
