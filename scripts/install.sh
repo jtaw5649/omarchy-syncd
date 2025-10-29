@@ -1,6 +1,41 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Bootstrapping: when this script is executed via curl|bash it is not inside
+# a cloned repository. Detect that case, clone the repo, and re-run from there.
+if [[ "${OMARCHY_SYNCD_BOOTSTRAPPED:-0}" != "1" ]]; then
+  script_dir=""
+  if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+    script_dir="$(
+      cd -- "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 || exit 0
+      pwd -P
+    )"
+  fi
+
+  if [[ -z "$script_dir" || ! -f "$script_dir/../Cargo.toml" ]]; then
+    REPO_URL=${OMARCHY_SYNCD_REPO_URL:-https://github.com/jtaw5649/omarchy-syncd.git}
+    REPO_BRANCH=${OMARCHY_SYNCD_REPO_BRANCH:-main}
+    CLONE_DEPTH=${OMARCHY_SYNCD_CLONE_DEPTH:-1}
+
+    if ! command -v git >/dev/null 2>&1; then
+      echo "error: git is required to install omarchy-syncd." >&2
+      exit 1
+    fi
+
+    TMP_DIR=$(mktemp -d)
+    cleanup() {
+      rm -rf "$TMP_DIR"
+    }
+    trap cleanup EXIT
+
+    echo "Fetching omarchy-syncd from $REPO_URL (branch: $REPO_BRANCH)..."
+    git clone --depth "$CLONE_DEPTH" --branch "$REPO_BRANCH" "$REPO_URL" "$TMP_DIR" >/dev/null
+
+    OMARCHY_SYNCD_BOOTSTRAPPED=1 "$TMP_DIR/scripts/install.sh" "$@"
+    exit $?
+  fi
+fi
+
 # Determine project root (one directory above this script).
 PROJECT_ROOT="$(
   cd -- "$(dirname "${BASH_SOURCE[0]}")"/.. >/dev/null 2>&1

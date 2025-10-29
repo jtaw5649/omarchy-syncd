@@ -10,20 +10,28 @@ omarchy-syncd restore
 
 ### Installation
 
-Pick whichever route matches your workflow:
+**Recommended (remote installer)**
 
+```bash
+curl -fsSL https://raw.githubusercontent.com/jtaw5649/omarchy-syncd/main/scripts/install.sh | bash
+```
+
+The script clones the latest release into a temporary directory, runs the interactive installer, and cleans up automatically. Pass any flags after `--` to forward them to the installer (for example, a custom target directory).
+
+**Local checkout**
+
+- `git clone https://github.com/jtaw5649/omarchy-syncd && cd omarchy-syncd` then run `./scripts/install.sh`. The script detects the local clone and skips the bootstrap step.
 - `cargo install --path .` – installs straight into `~/.cargo/bin` (ensure it is on your `PATH`).
-- `./scripts/install.sh [target-dir]` – builds a release binary, copies it into the directory you specify (defaults to `~/.local/bin`), and runs an interactive setup: it can create a new private GitHub repository automatically via `gh repo create`, populate the config with the default path bundle, and add any extra paths you supply.
 - `cargo build --release` – then copy `target/release/omarchy-syncd` wherever you prefer.
 
-You only need Rust’s toolchain (`cargo`) for these steps; runtime dependencies are just `git` and a POSIX shell.
+The installer requires Rust’s toolchain (`cargo`), `git`, and a POSIX shell at install time; day-to-day usage only needs `git` and the `omarchy-syncd` binary.
 
 ### Commands
 
 - `init` – writes `~/.config/omarchy-syncd/config.toml`. Repeat `--path` to track multiple files or directories. Add `--bundle <id>` (repeat as needed) or `--include-defaults` to prefill the Omarchy bundles (Hypr, Waybar, Omarchy, Alacritty, Ghostty, Kitty, btop, fastfetch, Neovim, Walker, SwayOSD, eza, cava, aether, elephant, wayvnc, systemd, Typora, gh). Pass `--interactive` to launch the selector UI (Tab to toggle, Enter to confirm) and `--verify-remote` if you want to check the remote branch immediately.
 - `backup` – clones the remote repo to a temporary directory, lets you choose which of the configured paths to include, then copies them, commits, and pushes. Use `--all`, `--no-ui`, or `--path <…>` to skip the selector in scripts. If there are no changes it exits cleanly without pushing.
 - `restore` – clones the remote repo to a temporary directory, lets you pick which tracked paths to restore, and copies them back into `$HOME` (overwriting existing files/directories). Use `--all`, `--no-ui`, or `--path <…>` to bypass the selector.
-- `install` – launches the multi-select installer so you can choose bundles and extra dotfiles (also usable non-interactively with `--bundle`, `--path`, and `--dry-run`). This is what the Hyprland launcher script calls.
+- `install` – launches the multi-select installer so you can choose bundles and extra dotfiles (also usable non-interactively with `--bundle`, `--path`, and `--dry-run`). This is the command to bind to Hyprland or Walker launchers.
 
 ### Default path bundle
 
@@ -66,3 +74,13 @@ paths = [
 - Symlink information (for example `~/.config/omarchy/current/theme`) is stored inside the backup at `.config/omarchy-syncd/symlinks.json`, and `restore` writes a copy to `~/.config/omarchy-syncd/symlinks.json` on each machine so theme links stay intact. **Do not delete this JSON file**—without it, Omarchy theme symlinks and other link-based configs cannot be reconstructed during `restore`.
 - After `restore` completes the tool runs `hyprctl reload` (if available) to pick up the updated configuration.
 - The helper script `scripts/omarchy-syncd-menu.sh` simply executes `omarchy-syncd install`; wire it to Super+Alt+Space (or your preferred launcher) to mirror the Omarchy desktop workflow.
+- **Launcher integration:**
+  - *Walker:* Add a command entry to `~/.config/walker/config.toml` (create the file if it does not exist):
+    ```toml
+    [[commands]]
+    name = "Omarchy Sync"
+    exec = "bash -lc 'omarchy-syncd install'"
+    category = "Setup"
+    ```
+    Restart Walker (or reload its config) and the entry will appear in the Install menu.
+  - *Hyprland:* Bind `scripts/omarchy-syncd-menu.sh` (or `omarchy-syncd install`) to your preferred key combination, e.g. Super+Alt+Space.
