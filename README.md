@@ -3,9 +3,10 @@
 A minimal Rust utility for Omarchy users who want easy dotfile backups. It clones your private GitHub repository on demand into a temporary workspace and exposes a small CLI:
 
 ```text
-omarchy-syncd init --repo-url <remote> --path <file-or-dir> [--path ...]
+omarchy-syncd menu
 omarchy-syncd backup [-m "Commit message"]
 omarchy-syncd restore
+omarchy-syncd config [--print-path | --create | --write ...]
 ```
 
 ### Installation
@@ -13,14 +14,14 @@ omarchy-syncd restore
 **Recommended (remote installer)**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jtaw5649/omarchy-syncd/main/scripts/install.sh | bash
+curl -fsSL https://github.com/jtaw5649/omarchy-syncd/raw/main/install.sh | bash
 ```
 
 The script clones the latest release into a temporary directory, runs the interactive installer, and cleans up automatically. Pass any flags after `--` to forward them to the installer (for example, a custom target directory).
 
 **Local checkout**
 
-- `git clone https://github.com/jtaw5649/omarchy-syncd && cd omarchy-syncd` then run `./scripts/install.sh`. The script detects the local clone and skips the bootstrap step.
+- `git clone https://github.com/jtaw5649/omarchy-syncd && cd omarchy-syncd` then run `./install.sh`. The script detects the local clone and skips the bootstrap step.
 - `cargo install --path .` – installs straight into `~/.cargo/bin` (ensure it is on your `PATH`).
 - `cargo build --release` – then copy `target/release/omarchy-syncd` wherever you prefer.
 
@@ -28,16 +29,16 @@ The installer requires Rust’s toolchain (`cargo`), `git`, and a POSIX shell at
 
 ### Commands
 
-- `init` – writes `~/.config/omarchy-syncd/config.toml`. Repeat `--path` to track multiple files or directories. Add `--bundle <id>` (repeat as needed) or `--include-defaults` to prefill the Omarchy bundles (Hypr, Waybar, Omarchy, Alacritty, Ghostty, Kitty, btop, fastfetch, Neovim, Walker, SwayOSD, eza, cava, aether, elephant, wayvnc, systemd, Typora, gh). Pass `--interactive` to launch the selector UI (Tab to toggle, Enter to confirm) and `--verify-remote` if you want to check the remote branch immediately.
 - `menu` – lightweight launcher UI with entries for Install, Backup, Restore, and Edit Config. This is what the wrapper scripts expose.
 - `backup` – clones the remote repo to a temporary directory, lets you choose which of the configured paths to include, then copies them, commits, and pushes. Use `--all`, `--no-ui`, or `--path <…>` to skip the selector in scripts. If there are no changes it exits cleanly without pushing.
 - `restore` – clones the remote repo to a temporary directory, lets you pick which tracked paths to restore, and copies them back into `$HOME` (overwriting existing files/directories). Use `--all`, `--no-ui`, or `--path <…>` to bypass the selector.
 - `install` – launches the multi-select installer so you can choose bundles and extra dotfiles (also usable non-interactively with `--bundle`, `--path`, and `--dry-run`).
-- `config` – prints or opens `~/.config/omarchy-syncd/config.toml`. Add `--print-path` to avoid launching an editor.
+- `config` – prints or opens `~/.config/omarchy-syncd/config.toml`. Add `--print-path` to avoid launching an editor, use `--create` to ensure the file exists, or call `--write` with `--repo-url`, `--branch`, and optional `--bundle/--path` flags to generate a configuration non-interactively.
+- `uninstall` – removes the installed binaries, helper scripts, config directory, and Walker entry.
 
 ### Default path bundle
 
-If you run `init` with `--include-defaults`, the installer tracks all of the built-in bundles (you can still layer more `--bundle` or `--path` flags):
+If you enable the "Include Omarchy default path bundles" option during the installer (or invoke `omarchy-syncd config --write --include-defaults ...`), the following bundles are tracked automatically (you can still layer more `--bundle` or `--path` flags):
 
 | Bundle ID        | What it covers                                               |
 | ---------------- | ------------------------------------------------------------ |
@@ -49,7 +50,7 @@ If you run `init` with `--include-defaults`, the installer tracks all of the bui
 | `creative`       | Aether, Elephant                                             |
 | `system`         | User-level systemd units                                     |
 
-All selectors use the same key bindings: **Tab** toggles the highlighted entry, **Enter** confirms, and **Esc** cancels. The installer shows every path from these bundles and lets you append any custom dotfile paths you want.
+All selectors let you type to filter in place. **Tab** toggles the highlighted entry, **Shift+Tab** selects everything, **Enter** confirms, and **Esc** cancels. The installer shows every path from these bundles and lets you append any custom dotfile paths you want.
 
 Missing directories are skipped during backup with a friendly message.
 
@@ -80,8 +81,8 @@ paths = [
   - *Walker:* Add a command entry to `~/.config/walker/config.toml` (create the file if it does not exist). Adjust the path if you installed somewhere other than `~/.local/bin`:
     ```toml
     [[commands]]
-    name = "Omarchy Sync"
-    exec = "~/.local/bin/omarchy-syncd-menu.sh"
+    name = "Omarchy Syncd"
+    exec = "~/.local/bin/omarchy-syncd-menu"
     category = "Setup"
     ```
     Restart Walker (or reload its config) and the entry will appear in the Install menu.

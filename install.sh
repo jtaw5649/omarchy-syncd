@@ -12,7 +12,7 @@ if [[ "${OMARCHY_SYNCD_BOOTSTRAPPED:-0}" != "1" ]]; then
     )"
   fi
 
-  if [[ -z "$script_dir" || ! -f "$script_dir/../Cargo.toml" ]]; then
+  if [[ -z "$script_dir" || ! -f "$script_dir/Cargo.toml" ]]; then
     REPO_URL=${OMARCHY_SYNCD_REPO_URL:-https://github.com/jtaw5649/omarchy-syncd.git}
     REPO_BRANCH=${OMARCHY_SYNCD_REPO_BRANCH:-main}
     CLONE_DEPTH=${OMARCHY_SYNCD_CLONE_DEPTH:-1}
@@ -31,14 +31,14 @@ if [[ "${OMARCHY_SYNCD_BOOTSTRAPPED:-0}" != "1" ]]; then
     echo "Fetching omarchy-syncd from $REPO_URL (branch: $REPO_BRANCH)..."
     git clone --depth "$CLONE_DEPTH" --branch "$REPO_BRANCH" "$REPO_URL" "$TMP_DIR" >/dev/null
 
-    OMARCHY_SYNCD_BOOTSTRAPPED=1 "$TMP_DIR/scripts/install.sh" "$@"
+    OMARCHY_SYNCD_BOOTSTRAPPED=1 "$TMP_DIR/install.sh" "$@"
     exit $?
   fi
 fi
 
-# Determine project root (one directory above this script).
+# Determine project root (directory containing this script).
 PROJECT_ROOT="$(
-  cd -- "$(dirname "${BASH_SOURCE[0]}")"/.. >/dev/null 2>&1
+  cd -- "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1
   pwd -P
 )"
 
@@ -57,15 +57,18 @@ cargo build --release --manifest-path "$PROJECT_ROOT/Cargo.toml"
 mkdir -p "$TARGET_DIR"
 cp "$BUILD_TARGET" "$TARGET_DIR/"
 
-HELPER_SCRIPTS=(
-  "omarchy-syncd-menu.sh"
-  "omarchy-syncd-install.sh"
-  "omarchy-syncd-backup.sh"
-  "omarchy-syncd-restore.sh"
-  "omarchy-syncd-config.sh"
+HELPER_BASENAMES=(
+  "omarchy-syncd-menu"
+  "omarchy-syncd-install"
+  "omarchy-syncd-backup"
+  "omarchy-syncd-restore"
+  "omarchy-syncd-config"
 )
-for helper in "${HELPER_SCRIPTS[@]}"; do
-  cp "$PROJECT_ROOT/scripts/$helper" "$TARGET_DIR/"
+for helper in "${HELPER_BASENAMES[@]}"; do
+  src="$PROJECT_ROOT/scripts/${helper}.sh"
+  cp "$src" "$TARGET_DIR/${helper}.sh"
+  chmod +x "$TARGET_DIR/${helper}.sh"
+  cp "$src" "$TARGET_DIR/$helper"
   chmod +x "$TARGET_DIR/$helper"
 done
 
@@ -104,29 +107,31 @@ if [ -f "$LEGACY_CONFIG" ] && [ ! -f "$CONFIG_PATH" ]; then
   fi
 fi
 
+SKIP_INIT=0
 if [ -f "$CONFIG_PATH" ]; then
   echo
   echo "Existing config detected at $CONFIG_PATH. Skipping initialization."
-  exit 0
+  SKIP_INIT=1
 fi
 
-if [ ! -t 0 ]; then
-  echo
-  echo "Non-interactive shell detected; skipping configuration. Run 'omarchy-syncd init --repo-url <remote>' later to set it up."
-  exit 0
-fi
+if [ $SKIP_INIT -eq 0 ]; then
+  if [ ! -t 0 ]; then
+    echo
+    echo "Non-interactive shell detected; skipping configuration. Run 'omarchy-syncd config --write --repo-url <remote> ...' later to set it up."
+    exit 0
+  fi
 
-if ! git config --global --get user.name >/dev/null 2>&1 || \
-   ! git config --global --get user.email >/dev/null 2>&1; then
-  echo
-  echo "Git is not fully configured (missing user.name / user.email)."
-  echo "Run 'git config --global user.name \"Your Name\"' and 'git config --global user.email \"you@example.com\"', then rerun the installer."
-  exit 1
-fi
+  if ! git config --global --get user.name >/dev/null 2>&1 || \
+     ! git config --global --get user.email >/dev/null 2>&1; then
+    echo
+    echo "Git is not fully configured (missing user.name / user.email)."
+    echo "Run 'git config --global user.name \"Your Name\"' and 'git config --global user.email \"you@example.com\"', then rerun the installer."
+    exit 1
+  fi
 
-ask_yes_no "Would you like to create a config now?"
-init_status=$?
-if [ $init_status -eq 0 ]; then
+  ask_yes_no "Would you like to create a config now?"
+  init_status=$?
+  if [ $init_status -eq 0 ]; then
   repo_url=""
   if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     ask_yes_no "Create a new private GitHub repository via gh?"
@@ -166,7 +171,7 @@ if [ $init_status -eq 0 ]; then
       fi
     elif [ $create_repo_status -eq 2 ]; then
       echo
-      echo "Input closed unexpectedly; skipping configuration. Run 'omarchy-syncd init --repo-url <remote>' later."
+      echo "Input closed unexpectedly; skipping configuration. Run 'omarchy-syncd config --write --repo-url <remote> ...' later."
       exit 0
     fi
   else
@@ -228,13 +233,13 @@ if [ $init_status -eq 0 ]; then
     include_defaults_choice=true
   elif [ $include_status -eq 2 ]; then
     echo
-    echo "Input closed unexpectedly; skipping configuration. Run 'omarchy-syncd init --repo-url <remote>' later."
+    echo "Input closed unexpectedly; skipping configuration. Run 'omarchy-syncd config --write --repo-url <remote> ...' later."
     exit 0
   fi
 
   read -r -p "Additional paths (comma-separated, optional): " extra_paths
 
-  args=("$INSTALLED_BIN" "init" "--repo-url" "$repo_url" "--branch" "$branch_name")
+  args=("$INSTALLED_BIN" "config" "--write" "--repo-url" "$repo_url" "--branch" "$branch_name")
 
   if [ "$include_defaults_choice" = true ]; then
     args+=("--include-defaults")
@@ -279,13 +284,13 @@ if [ $init_status -eq 0 ]; then
   if [ $walker_status -eq 0 ]; then
     WALKER_CONFIG="$HOME/.config/walker/config.toml"
     mkdir -p "$(dirname "$WALKER_CONFIG")"
-    if ! grep -Fq "$TARGET_DIR/omarchy-syncd-menu.sh" "$WALKER_CONFIG" 2>/dev/null; then
+    if ! grep -Fq "$TARGET_DIR/omarchy-syncd-menu" "$WALKER_CONFIG" 2>/dev/null; then
       {
         [ -s "$WALKER_CONFIG" ] && echo
         cat <<WALKER_ENTRY
 [[commands]]
-name = "Omarchy Sync"
-exec = "$TARGET_DIR/omarchy-syncd-menu.sh"
+name = "Omarchy Syncd"
+exec = "$TARGET_DIR/omarchy-syncd-menu"
 category = "Setup"
 WALKER_ENTRY
       } >>"$WALKER_CONFIG"
@@ -300,11 +305,41 @@ WALKER_ENTRY
     echo
     echo "Skipping Walker integration. You can add it later in ~/.config/walker/config.toml."
   fi
-elif [ $init_status -eq 2 ]; then
-  echo
-  echo "Input closed unexpectedly; skipping configuration. Run 'omarchy-syncd init --repo-url <remote>' later."
-  exit 0
-else
-  echo
-  echo "Skipping configuration. Run 'omarchy-syncd init --repo-url <remote>' later to set it up."
+  elif [ $init_status -eq 2 ]; then
+    echo
+    echo "Input closed unexpectedly; skipping configuration. Run 'omarchy-syncd config --write --repo-url <remote> ...' later."
+    exit 0
+  else
+    echo
+    echo "Skipping configuration. Run 'omarchy-syncd config --write --repo-url <remote> ...' later to set it up."
+  fi
+fi
+
+if [ -t 0 ]; then
+  ask_yes_no "Add a Walker launcher entry for omarchy-syncd?"
+  walker_status=$?
+  if [ $walker_status -eq 0 ]; then
+    WALKER_CONFIG="$HOME/.config/walker/config.toml"
+    mkdir -p "$(dirname "$WALKER_CONFIG")"
+    if ! grep -Fq "$TARGET_DIR/omarchy-syncd-menu" "$WALKER_CONFIG" 2>/dev/null; then
+      {
+        [ -s "$WALKER_CONFIG" ] && echo
+        cat <<WALKER_ENTRY
+[[commands]]
+name = "Omarchy Syncd"
+exec = "$TARGET_DIR/omarchy-syncd-menu"
+category = "Setup"
+WALKER_ENTRY
+      } >>"$WALKER_CONFIG"
+      echo "Added Walker command to $WALKER_CONFIG."
+    else
+      echo "Walker configuration already contains an omarchy-syncd entry; skipping."
+    fi
+  elif [ $walker_status -eq 2 ]; then
+    echo
+    echo "Input closed unexpectedly; skipping Walker configuration.";
+  else
+    echo
+    echo "Skipping Walker integration. You can add it later in ~/.config/walker/config.toml."
+  fi
 fi
