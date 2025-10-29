@@ -20,37 +20,26 @@ You only need Rust’s toolchain (`cargo`) for these steps; runtime dependencies
 
 ### Commands
 
-- `init` – writes `~/.config/omarchy-syncd/config.toml`. Repeat `--path` to track multiple files or directories. Add `--include-defaults` to prefill the Omarchy bundle (Hypr, Waybar, Omarchy, Alacritty, Ghostty, Kitty, btop, fastfetch, Neovim, Walker, SwayOSD, eza, cava, aether, elephant, wayvnc, systemd, Typora, gh). Pass `--verify-remote` if you want to check the remote branch immediately.
+- `init` – writes `~/.config/omarchy-syncd/config.toml`. Repeat `--path` to track multiple files or directories. Add `--bundle <id>` (repeat as needed) or `--include-defaults` to prefill the Omarchy bundles (Hypr, Waybar, Omarchy, Alacritty, Ghostty, Kitty, btop, fastfetch, Neovim, Walker, SwayOSD, eza, cava, aether, elephant, wayvnc, systemd, Typora, gh). Pass `--interactive` to launch the selector UI and `--verify-remote` if you want to check the remote branch immediately.
 - `backup` – clones the remote repo to a temporary directory, copies the tracked files into it, commits, and pushes. If there are no changes it exits cleanly without pushing.
 - `restore` – clones the remote repo to a temporary directory and copies tracked files back into `$HOME` (overwriting existing files/directories).
+- `install` – launches the multi-select installer so you can choose bundles and extra dotfiles (also usable non-interactively with `--bundle`, `--path`, and `--dry-run`). This is what the Hyprland launcher script calls.
 
 ### Default path bundle
 
-If you run `init` with `--include-defaults`, the following paths are tracked automatically (you can still add extra `--path` flags):
+If you run `init` with `--include-defaults`, the installer tracks all of the built-in bundles (you can still layer more `--bundle` or `--path` flags):
 
-```
-~/.config/hypr
-~/.config/waybar
-~/.config/omarchy
-~/.config/alacritty
-~/.config/ghostty
-~/.config/kitty
-~/.config/btop
-~/.config/fastfetch
-~/.config/nvim
-~/.config/walker
-~/.config/swayosd
-~/.config/eza
-~/.config/cava
-~/.config/git
-~/.config/lazygit
-~/.config/aether
-~/.config/elephant
-~/.config/wayvnc
-~/.config/systemd
-~/.config/Typora
-~/.config/gh
-```
+| Bundle ID        | What it covers                                               |
+| ---------------- | ------------------------------------------------------------ |
+| `core_desktop`   | Hypr, Waybar, Omarchy assets, SwayOSD, WayVNC                |
+| `terminals`      | Alacritty, Ghostty, Kitty                                    |
+| `cli_tools`      | btop, fastfetch, eza, cava, Walker                           |
+| `editors`        | Neovim, Typora                                               |
+| `dev_git`        | git, lazygit, gh                                             |
+| `creative`       | Aether, Elephant                                             |
+| `system`         | User-level systemd units                                     |
+
+The interactive installer always shows every path from these bundles and lets you append any custom dotfile paths you want.
 
 Missing directories are skipped during backup with a friendly message.
 
@@ -76,3 +65,4 @@ paths = [
 - Repositories are cloned into a temporary directory for each run, so there is no long-lived local staging area—your private GitHub repository is the source of truth.
 - Symlink information (for example `~/.config/omarchy/current/theme`) is stored inside the backup at `.config/omarchy-syncd/symlinks.json`, and `restore` writes a copy to `~/.config/omarchy-syncd/symlinks.json` on each machine so theme links stay intact. **Do not delete this JSON file**—without it, Omarchy theme symlinks and other link-based configs cannot be reconstructed during `restore`.
 - After `restore` completes the tool runs `hyprctl reload` (if available) to pick up the updated configuration.
+- The helper script `scripts/omarchy-syncd-menu.sh` simply executes `omarchy-syncd install`; wire it to Super+Alt+Space (or your preferred launcher) to mirror the Omarchy desktop workflow.

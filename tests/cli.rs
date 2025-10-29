@@ -13,23 +13,6 @@ use walkdir::WalkDir;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 
-#[derive(Deserialize)]
-struct RepoConfig {
-    url: String,
-    branch: String,
-}
-
-#[derive(Deserialize)]
-struct FileConfig {
-    paths: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct SyncConfig {
-    repo: RepoConfig,
-    files: FileConfig,
-}
-
 fn path_str(path: &Path) -> Result<&str> {
     path.to_str()
         .context("Path contains invalid UTF-8 characters, which git cannot handle in these tests")
@@ -160,7 +143,7 @@ fn init_with_defaults_and_extra_path_writes_config() -> Result<()> {
 
     let config_path = find_config_file(&home)?;
     let raw = fs::read_to_string(&config_path)?;
-    let cfg: SyncConfig = toml::from_str(&raw)?;
+    let cfg: omarchy_syncd::config::SyncConfig = toml::from_str(&raw)?;
 
     assert_eq!(cfg.repo.url, path_str(&remote)?);
     assert_eq!(cfg.repo.branch, "main");
@@ -177,35 +160,23 @@ fn init_with_defaults_and_extra_path_writes_config() -> Result<()> {
             .contains(&"~/.config/custom-app".to_string())
     );
 
-    let expected_defaults = [
-        "~/.config/hypr",
-        "~/.config/waybar",
-        "~/.config/omarchy",
-        "~/.config/alacritty",
-        "~/.config/ghostty",
-        "~/.config/kitty",
-        "~/.config/btop",
-        "~/.config/fastfetch",
-        "~/.config/nvim",
-        "~/.config/walker",
-        "~/.config/swayosd",
-        "~/.config/eza",
-        "~/.config/cava",
-        "~/.config/git",
-        "~/.config/lazygit",
-        "~/.config/aether",
-        "~/.config/elephant",
-        "~/.config/wayvnc",
-        "~/.config/systemd",
-        "~/.config/Typora",
-        "~/.config/gh",
-    ];
+    let mut expected_bundles: Vec<String> = omarchy_syncd::bundles::DEFAULT_BUNDLE_IDS
+        .iter()
+        .map(|id| id.to_string())
+        .collect();
+    expected_bundles.sort();
+    assert_eq!(cfg.files.bundles, expected_bundles, "default bundle set");
 
-    for expected in expected_defaults {
-        assert!(
-            cfg.files.paths.contains(&expected.to_string()),
-            "missing default {expected}"
-        );
+    let resolved = cfg.resolved_paths()?;
+    let resolved_set: HashSet<_> = resolved.into_iter().collect();
+    for bundle_id in omarchy_syncd::bundles::DEFAULT_BUNDLE_IDS {
+        let bundle = omarchy_syncd::bundles::find(bundle_id).expect("bundle should exist");
+        for path in bundle.paths {
+            assert!(
+                resolved_set.contains(&path.to_string()),
+                "missing {path} from resolved defaults"
+            );
+        }
     }
 
     Ok(())
@@ -343,6 +314,115 @@ fn backup_and_restore_roundtrip() -> Result<()> {
         let background_link = home.join(".config/omarchy/current/background");
         assert!(background_link.symlink_metadata()?.file_type().is_symlink());
     }
+
+    Ok(())
+}
+
+#[test]
+fn init_accepts_bundle_flags() -> Result<()> {
+    let temp = tempdir()?;
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home)?;
+
+    let remote = init_remote_repo(temp.path(), "remote-bundle.git")?;
+
+    base_command(&home)
+        .args([
+            "init",
+            "--repo-url",
+            path_str(&remote)?,
+            "--bundle",
+            "core_desktop",
+        ])
+        .assert()
+        .success();
+
+    let config_path = find_config_file(&home)?;
+    let raw = fs::read_to_string(&config_path)?;
+    let cfg: omarchy_syncd::config::SyncConfig = toml::from_str(&raw)?;
+
+    assert_eq!(
+        cfg.files.bundles,
+        vec!["core_desktop".to_string()],
+        "bundle flag should be persisted"
+    );
+    assert!(
+        cfg.files.paths.is_empty(),
+        "no explicit paths expected when only bundle flag is set"
+    );
+
+    let resolved = cfg.resolved_paths()?;
+    let resolved_set: HashSet<_> = resolved.into_iter().collect();
+    let bundle = omarchy_syncd::bundles::find("core_desktop").expect("core bundle exists");
+    for path in bundle.paths {
+        assert!(
+            resolved_set.contains(&path.to_string()),
+            "resolved bundle should include {path}"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn install_command_updates_config_via_cli() -> Result<()> {
+    let temp = tempdir()?;
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home)?;
+
+    let remote = init_remote_repo(temp.path(), "remote-install.git")?;
+
+    base_command(&home)
+        .args([
+            "init",
+            "--repo-url",
+            path_str(&remote)?,
+            "--bundle",
+            "core_desktop",
+        ])
+        .assert()
+        .success();
+
+    base_command(&home)
+        .args([
+            "install",
+            "--bundle",
+            "terminals",
+            "--bundle",
+            "dev_git",
+            "--path",
+            "~/.config/custom-app",
+            "--no-ui",
+        ])
+        .assert()
+        .success();
+
+    let config_path = find_config_file(&home)?;
+    let raw = fs::read_to_string(&config_path)?;
+    let cfg: omarchy_syncd::config::SyncConfig = toml::from_str(&raw)?;
+
+    assert_eq!(
+        cfg.files.paths,
+        vec!["~/.config/custom-app".to_string()],
+        "install should persist explicit path selections"
+    );
+
+    let mut expected_bundles = vec!["dev_git".to_string(), "terminals".to_string()];
+    expected_bundles.sort();
+    assert_eq!(
+        cfg.files.bundles, expected_bundles,
+        "install should replace bundle selection"
+    );
+
+    let resolved = cfg.resolved_paths()?;
+    let resolved_set: HashSet<_> = resolved.into_iter().collect();
+    for path in omarchy_syncd::bundles::find("terminals").unwrap().paths {
+        assert!(resolved_set.contains(&path.to_string()));
+    }
+    for path in omarchy_syncd::bundles::find("dev_git").unwrap().paths {
+        assert!(resolved_set.contains(&path.to_string()));
+    }
+    assert!(resolved_set.contains(&"~/.config/custom-app".to_string()));
 
     Ok(())
 }
