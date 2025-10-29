@@ -32,16 +32,24 @@ pub struct Choice {
     pub label: String,
 }
 
-pub fn multi_select(prompt: &str, header: &str, choices: &[Choice]) -> Result<Vec<String>> {
+pub fn multi_select(
+    prompt: &str,
+    header: &str,
+    choices: &[Choice],
+    extra_binds: &[&str],
+) -> Result<Vec<String>> {
     if choices.is_empty() {
         return Ok(Vec::new());
     }
+
+    let mut binds: Vec<&str> = vec!["tab:toggle", "shift-tab:select-all"];
+    binds.extend(extra_binds.iter().copied());
 
     let options = SkimOptionsBuilder::default()
         .multi(true)
         .prompt(Some(prompt))
         .header(Some(header))
-        .bind(vec!["tab:toggle", "shift-tab:toggle+up"])
+        .bind(binds)
         .build()
         .map_err(|err| anyhow!("Failed creating skim options: {err}"))?;
 
@@ -72,16 +80,23 @@ pub fn multi_select(prompt: &str, header: &str, choices: &[Choice]) -> Result<Ve
     Ok(selected)
 }
 
-pub fn single_select(prompt: &str, header: &str, choices: &[Choice]) -> Result<String> {
+pub fn single_select(
+    prompt: &str,
+    header: &str,
+    choices: &[Choice],
+    extra_binds: &[&str],
+) -> Result<String> {
     if choices.is_empty() {
         anyhow::bail!("No options available");
     }
+
+    let binds: Vec<&str> = extra_binds.iter().copied().collect();
 
     let options = SkimOptionsBuilder::default()
         .multi(false)
         .prompt(Some(prompt))
         .header(Some(header))
-        .bind(vec!["tab:down", "shift-tab:up"])
+        .bind(binds)
         .build()
         .map_err(|err| anyhow!("Failed creating skim options: {err}"))?;
 

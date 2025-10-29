@@ -131,7 +131,8 @@ fn init_with_defaults_and_extra_path_writes_config() -> Result<()> {
 
     base_command(&home)
         .args([
-            "init",
+            "config",
+            "--write",
             "--repo-url",
             path_str(&remote)?,
             "--include-defaults",
@@ -221,7 +222,8 @@ fn backup_and_restore_roundtrip() -> Result<()> {
 
     base_command(&home)
         .args([
-            "init",
+            "config",
+            "--write",
             "--repo-url",
             path_str(&remote)?,
             "--include-defaults",
@@ -328,7 +330,8 @@ fn init_accepts_bundle_flags() -> Result<()> {
 
     base_command(&home)
         .args([
-            "init",
+            "config",
+            "--write",
             "--repo-url",
             path_str(&remote)?,
             "--bundle",
@@ -374,7 +377,8 @@ fn install_command_updates_config_via_cli() -> Result<()> {
 
     base_command(&home)
         .args([
-            "init",
+            "config",
+            "--write",
             "--repo-url",
             path_str(&remote)?,
             "--bundle",
@@ -445,7 +449,8 @@ fn backup_respects_path_flag() -> Result<()> {
 
     base_command(&home)
         .args([
-            "init",
+            "config",
+            "--write",
             "--repo-url",
             path_str(&remote)?,
             "--path",
@@ -494,7 +499,8 @@ fn restore_respects_path_flag() -> Result<()> {
 
     base_command(&home)
         .args([
-            "init",
+            "config",
+            "--write",
             "--repo-url",
             path_str(&remote)?,
             "--path",
@@ -540,7 +546,8 @@ fn config_prints_path() -> Result<()> {
 
     base_command(&home)
         .args([
-            "init",
+            "config",
+            "--write",
             "--repo-url",
             path_str(&remote)?,
             "--path",
@@ -577,7 +584,8 @@ fn backup_initializes_empty_remote() -> Result<()> {
 
     base_command(&home)
         .args([
-            "init",
+            "config",
+            "--write",
             "--repo-url",
             path_str(&remote)?,
             "--path",
