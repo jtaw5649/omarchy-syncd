@@ -63,6 +63,7 @@ HELPER_BASENAMES=(
   "omarchy-syncd-backup"
   "omarchy-syncd-restore"
   "omarchy-syncd-config"
+  "omarchy-syncd-uninstall"
 )
 for helper in "${HELPER_BASENAMES[@]}"; do
   src="$PROJECT_ROOT/scripts/${helper}.sh"
@@ -275,8 +276,8 @@ if [ $SKIP_INIT -eq 0 ]; then
     echo
     echo "Input closed unexpectedly; skipping initial backup. Run 'omarchy-syncd backup' later."
   else
-  echo
-  echo "Skipping initial backup. Run 'omarchy-syncd backup' whenever you're ready."
+    echo
+    echo "Skipping initial backup. Run 'omarchy-syncd backup' whenever you're ready."
   fi
 
   ask_yes_no "Add a Walker launcher entry for omarchy-syncd?"
@@ -295,6 +296,11 @@ category = "Setup"
 WALKER_ENTRY
       } >>"$WALKER_CONFIG"
       echo "Added Walker command to $WALKER_CONFIG."
+      if command -v walker >/dev/null 2>&1; then
+        pkill walker >/dev/null 2>&1 || true
+        walker >/dev/null 2>&1 &
+        disown || true
+      fi
     else
       echo "Walker configuration already contains an omarchy-syncd entry; skipping."
     fi
@@ -332,6 +338,11 @@ category = "Setup"
 WALKER_ENTRY
       } >>"$WALKER_CONFIG"
       echo "Added Walker command to $WALKER_CONFIG."
+      if command -v walker >/dev/null 2>&1; then
+        pkill walker >/dev/null 2>&1 || true
+        walker >/dev/null 2>&1 &
+        disown || true
+      fi
     else
       echo "Walker configuration already contains an omarchy-syncd entry; skipping."
     fi
