@@ -428,6 +428,109 @@ fn install_command_updates_config_via_cli() -> Result<()> {
 }
 
 #[test]
+fn backup_respects_path_flag() -> Result<()> {
+    let temp = tempdir()?;
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home)?;
+
+    let remote = init_remote_repo(temp.path(), "remote-selective.git")?;
+
+    let hypr_conf = home.join(".config/hypr/hyprland.conf");
+    fs::create_dir_all(hypr_conf.parent().unwrap())?;
+    fs::write(&hypr_conf, "monitor = DP-1\n")?;
+
+    let nvim_conf = home.join(".config/nvim/init.lua");
+    fs::create_dir_all(nvim_conf.parent().unwrap())?;
+    fs::write(&nvim_conf, "print('hello')\n")?;
+
+    base_command(&home)
+        .args([
+            "init",
+            "--repo-url",
+            path_str(&remote)?,
+            "--path",
+            "~/.config/hypr",
+            "--path",
+            "~/.config/nvim",
+        ])
+        .assert()
+        .success();
+
+    base_command(&home)
+        .args(["backup", "--path", "~/.config/hypr", "--no-ui"])
+        .assert()
+        .success();
+
+    let checkout = temp.path().join("checkout-selective");
+    run_git(
+        Some(temp.path()),
+        &["clone", path_str(&remote)?, path_str(&checkout)?],
+    )?;
+
+    assert!(checkout.join(".config/hypr/hyprland.conf").exists());
+    assert!(
+        !checkout.join(".config/nvim/init.lua").exists(),
+        "nvim config should not be backed up when excluded"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn restore_respects_path_flag() -> Result<()> {
+    let temp = tempdir()?;
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home)?;
+
+    let remote = init_remote_repo(temp.path(), "remote-selective-restore.git")?;
+
+    let hypr_conf = home.join(".config/hypr/hyprland.conf");
+    fs::create_dir_all(hypr_conf.parent().unwrap())?;
+    fs::write(&hypr_conf, "monitor = DP-1\n")?;
+
+    let nvim_conf = home.join(".config/nvim/init.lua");
+    fs::create_dir_all(nvim_conf.parent().unwrap())?;
+    fs::write(&nvim_conf, "print('hello')\n")?;
+
+    base_command(&home)
+        .args([
+            "init",
+            "--repo-url",
+            path_str(&remote)?,
+            "--path",
+            "~/.config/hypr",
+            "--path",
+            "~/.config/nvim",
+        ])
+        .assert()
+        .success();
+
+    base_command(&home)
+        .args(["backup", "--no-ui", "--all"])
+        .assert()
+        .success();
+
+    fs::remove_dir_all(hypr_conf.parent().unwrap())?;
+    fs::remove_dir_all(nvim_conf.parent().unwrap())?;
+
+    base_command(&home)
+        .args(["restore", "--path", "~/.config/hypr", "--no-ui"])
+        .assert()
+        .success();
+
+    assert!(
+        home.join(".config/hypr/hyprland.conf").exists(),
+        "hypr config should be restored"
+    );
+    assert!(
+        !home.join(".config/nvim/init.lua").exists(),
+        "nvim config should remain absent when excluded"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn backup_initializes_empty_remote() -> Result<()> {
     let temp = tempdir()?;
     let home = temp.path().join("home");

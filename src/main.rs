@@ -1,13 +1,15 @@
 use std::collections::{BTreeSet, HashSet};
-use std::io::IsTerminal;
+use std::io::{self, IsTerminal, Write};
 use std::process::Command;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use dialoguer::{theme::ColorfulTheme, Confirm, Input, MultiSelect};
 use tempfile::tempdir;
 
-use omarchy_syncd::{bundles, config, fs_ops, git};
+use omarchy_syncd::{
+    bundles, config, fs_ops, git,
+    selector::{self, Choice},
+};
 
 use config::{FileConfig, RepoConfig, SyncConfig, load_config, write_config};
 
@@ -30,7 +32,7 @@ enum Commands {
     /// Clone the remote, copy dotfiles, commit, and push to GitHub.
     Backup(BackupArgs),
     /// Clone the remote and restore tracked files into $HOME.
-    Restore,
+    Restore(RestoreArgs),
     /// Launch the interactive selector to choose bundles and dotfiles.
     Install(InstallArgs),
 }
@@ -68,6 +70,15 @@ struct BackupArgs {
     /// Commit message to use when pushing changes. Defaults to "Automated backup".
     #[arg(short, long)]
     message: Option<String>,
+    /// Restrict backup to specified paths (repeat flag).
+    #[arg(long = "path")]
+    paths: Vec<String>,
+    /// Skip the selection UI and back up every configured path.
+    #[arg(long = "all")]
+    all: bool,
+    /// Disable interactive selection even if running in a TTY.
+    #[arg(long = "no-ui")]
+    no_ui: bool,
 }
 
 #[derive(Args)]
@@ -86,13 +97,26 @@ struct InstallArgs {
     dry_run: bool,
 }
 
+#[derive(Args)]
+struct RestoreArgs {
+    /// Restrict restore to specified paths (repeat flag).
+    #[arg(long = "path")]
+    paths: Vec<String>,
+    /// Restore all configured paths without prompting.
+    #[arg(long = "all")]
+    all: bool,
+    /// Disable interactive selection even if running in a TTY.
+    #[arg(long = "no-ui")]
+    no_ui: bool,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Init(args) => cmd_init(args),
         Commands::Backup(args) => cmd_backup(args),
-        Commands::Restore => cmd_restore(),
+        Commands::Restore(args) => cmd_restore(args),
         Commands::Install(args) => cmd_install(args),
     }
 }
@@ -142,7 +166,9 @@ fn cmd_init(args: InitArgs) -> Result<()> {
 
     if interactive {
         if !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
-            anyhow::bail!("Interactive init requires a TTY. Re-run within a terminal or use --bundle/--path flags.");
+            anyhow::bail!(
+                "Interactive init requires a TTY. Re-run within a terminal or use --bundle/--path flags."
+            );
         }
         let selection = interactive_selection(&bundle_vec, &explicit_paths)?;
         bundle_vec = normalize_bundles(selection.bundles);
@@ -181,12 +207,46 @@ fn cmd_backup(args: BackupArgs) -> Result<()> {
     let cfg = load_config()?;
     cfg.ensure_non_empty_paths()?;
 
+    let resolved_paths = cfg.resolved_paths()?;
+    let mut selected_paths = if !args.paths.is_empty() {
+        let normalized = normalize_paths(args.paths.clone());
+        validate_paths(&resolved_paths, &normalized)?;
+        normalized
+    } else {
+        resolved_paths.clone()
+    };
+
+    let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let should_prompt = args.paths.is_empty() && !args.all && !args.no_ui && is_tty;
+    if should_prompt {
+        let choices: Vec<Choice> = resolved_paths
+            .iter()
+            .map(|path| Choice {
+                id: path.clone(),
+                label: path.clone(),
+            })
+            .collect();
+        let selection = selector::multi_select(
+            "Backup paths> ",
+            "Tab: toggle • Enter: confirm • Esc: cancel",
+            &choices,
+        )?;
+        if !selection.is_empty() {
+            let normalized = normalize_paths(selection);
+            validate_paths(&resolved_paths, &normalized)?;
+            selected_paths = normalized;
+        }
+    }
+
+    if selected_paths.is_empty() {
+        selected_paths = resolved_paths;
+    }
+
     let temp = tempdir().context("Failed to create temporary directory")?;
     let repo_dir = temp.path().join("repo");
     git::clone_repo(&cfg.repo.url, &cfg.repo.branch, &repo_dir)
         .context("Failed to clone repository")?;
-    let paths = cfg.resolved_paths()?;
-    fs_ops::snapshot(&paths, &repo_dir)?;
+    fs_ops::snapshot(&selected_paths, &repo_dir)?;
 
     let message = args
         .message
@@ -196,16 +256,50 @@ fn cmd_backup(args: BackupArgs) -> Result<()> {
     Ok(())
 }
 
-fn cmd_restore() -> Result<()> {
+fn cmd_restore(args: RestoreArgs) -> Result<()> {
     let cfg = load_config()?;
     cfg.ensure_non_empty_paths()?;
+
+    let resolved_paths = cfg.resolved_paths()?;
+    let mut selected_paths = if !args.paths.is_empty() {
+        let normalized = normalize_paths(args.paths.clone());
+        validate_paths(&resolved_paths, &normalized)?;
+        normalized
+    } else {
+        resolved_paths.clone()
+    };
+
+    let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let should_prompt = args.paths.is_empty() && !args.all && !args.no_ui && is_tty;
+    if should_prompt {
+        let choices: Vec<Choice> = resolved_paths
+            .iter()
+            .map(|path| Choice {
+                id: path.clone(),
+                label: path.clone(),
+            })
+            .collect();
+        let selection = selector::multi_select(
+            "Restore paths> ",
+            "Tab: toggle • Enter: confirm • Esc: cancel",
+            &choices,
+        )?;
+        if !selection.is_empty() {
+            let normalized = normalize_paths(selection);
+            validate_paths(&resolved_paths, &normalized)?;
+            selected_paths = normalized;
+        }
+    }
+
+    if selected_paths.is_empty() {
+        selected_paths = resolved_paths;
+    }
 
     let temp = tempdir().context("Failed to create temporary directory")?;
     let repo_dir = temp.path().join("repo");
     git::clone_repo(&cfg.repo.url, &cfg.repo.branch, &repo_dir)
         .context("Failed to clone repository")?;
-    let paths = cfg.resolved_paths()?;
-    fs_ops::restore(&paths, &repo_dir)?;
+    fs_ops::restore(&selected_paths, &repo_dir)?;
     println!("Restore complete.");
 
     match Command::new("hyprctl").arg("reload").status() {
@@ -225,8 +319,8 @@ fn cmd_restore() -> Result<()> {
 }
 
 fn cmd_install(args: InstallArgs) -> Result<()> {
-    let mut cfg =
-        load_config().context("Missing config. Run 'omarchy-syncd init --repo-url <remote>' first.")?;
+    let mut cfg = load_config()
+        .context("Missing config. Run 'omarchy-syncd init --repo-url <remote>' first.")?;
 
     let mut selected_bundles = if !args.bundles.is_empty() {
         args.bundles.clone()
@@ -293,88 +387,53 @@ struct SelectionResult {
 }
 
 fn interactive_selection(
-    current_bundles: &[String],
+    _current_bundles: &[String],
     current_paths: &[String],
 ) -> Result<SelectionResult> {
-    let theme = ColorfulTheme::default();
-    let all_bundles = bundles::all();
-    let bundle_labels: Vec<String> = all_bundles
+    let header = "Tab: toggle • Enter: confirm • Esc: cancel";
+    let bundle_choices: Vec<Choice> = bundles::all()
         .iter()
-        .map(|bundle| format!("{} – {}", bundle.name, bundle.description))
+        .map(|bundle| Choice {
+            id: bundle.id.to_string(),
+            label: format!("{:<13} {}", bundle.name, bundle.description),
+        })
         .collect();
-    let bundle_defaults: Vec<bool> = all_bundles
-        .iter()
-        .map(|bundle| current_bundles.iter().any(|id| id == bundle.id))
-        .collect();
+    let mut bundle_selection = selector::multi_select("Bundles> ", header, &bundle_choices)?;
 
-    let selected_bundle_indices = MultiSelect::with_theme(&theme)
-        .with_prompt("Select dotfile bundles")
-        .items(&bundle_labels)
-        .defaults(&bundle_defaults)
-        .interact_opt()?
-        .ok_or_else(|| anyhow::anyhow!("Bundle selection cancelled"))?;
-
-    let mut bundle_choices: Vec<String> = selected_bundle_indices
-        .into_iter()
-        .map(|idx| all_bundles[idx].id.to_string())
-        .collect();
-
-    let mut path_options: Vec<String> = all_bundles
+    let mut path_pool: Vec<String> = bundles::all()
         .iter()
         .flat_map(|bundle| bundle.paths.iter().copied())
         .map(String::from)
         .collect();
     for path in current_paths {
-        if !path_options.contains(path) {
-            path_options.push(path.clone());
+        if !path_pool.contains(path) {
+            path_pool.push(path.clone());
         }
     }
-    path_options.sort();
-    path_options.dedup();
+    path_pool.sort();
+    path_pool.dedup();
 
-    let path_defaults: Vec<bool> = path_options
+    let path_choices: Vec<Choice> = path_pool
         .iter()
-        .map(|path| current_paths.iter().any(|p| p == path))
+        .map(|path| Choice {
+            id: path.clone(),
+            label: path.clone(),
+        })
         .collect();
+    let mut path_selection = selector::multi_select("Paths> ", header, &path_choices)?;
 
-    let mut path_selection: Vec<String> = MultiSelect::with_theme(&theme)
-        .with_prompt("Select individual dotfiles (in addition to bundles)")
-        .items(&path_options)
-        .defaults(&path_defaults)
-        .interact_opt()?
-        .ok_or_else(|| anyhow::anyhow!("Path selection cancelled"))?
-        .into_iter()
-        .map(|idx| path_options[idx].clone())
-        .collect();
-
-    loop {
-        let add_more = Confirm::with_theme(&theme)
-            .with_prompt("Add another custom path?")
-            .default(false)
-            .interact()?;
-        if !add_more {
-            break;
-        }
-
-        let input: String = Input::with_theme(&theme)
-            .with_prompt("Dotfile path (e.g. ~/.config/example)")
-            .allow_empty(true)
-            .interact_text()?;
-        let trimmed = input.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let trimmed = trimmed.to_string();
-        if !path_selection.contains(&trimmed) {
-            path_selection.push(trimmed);
+    while prompt_yes_no("Add another custom path?")? {
+        let custom = prompt_string("Dotfile path (e.g. ~/.config/example)")?;
+        if !custom.is_empty() && !path_selection.contains(&custom) {
+            path_selection.push(custom);
         }
     }
 
-    bundle_choices = normalize_bundles(bundle_choices);
+    bundle_selection = normalize_bundles(bundle_selection);
     path_selection = normalize_paths(path_selection);
 
     Ok(SelectionResult {
-        bundles: bundle_choices,
+        bundles: bundle_selection,
         paths: path_selection,
     })
 }
@@ -403,6 +462,43 @@ fn normalize_paths(paths: Vec<String>) -> Vec<String> {
         .filter(|p| !p.is_empty())
         .collect();
     set.into_iter().collect()
+}
+
+fn prompt_yes_no(question: &str) -> Result<bool> {
+    loop {
+        print!("{question} [y/n]: ");
+        io::stdout().flush()?;
+        let mut line = String::new();
+        io::stdin().read_line(&mut line)?;
+        match line.trim().to_lowercase().as_str() {
+            "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => {
+                println!("Please answer 'y' or 'n'.");
+            }
+        }
+    }
+}
+
+fn prompt_string(prompt: &str) -> Result<String> {
+    print!("{prompt}: ");
+    io::stdout().flush()?;
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    Ok(line.trim().to_string())
+}
+
+fn validate_paths(valid: &[String], selected: &[String]) -> Result<()> {
+    let known: HashSet<&str> = valid.iter().map(|p| p.as_str()).collect();
+    for path in selected {
+        if !known.contains(path.as_str()) {
+            anyhow::bail!(
+                "Path {} is not part of the configured backup set. Use 'omarchy-syncd install' to add it first.",
+                path
+            );
+        }
+    }
+    Ok(())
 }
 
 fn prune_explicit_paths(bundles: &[String], paths: Vec<String>) -> Result<Vec<String>> {

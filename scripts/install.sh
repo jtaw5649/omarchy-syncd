@@ -31,6 +31,22 @@ INSTALLED_BIN="$TARGET_DIR/$BIN_NAME"
 CONFIG_PATH="$HOME/.config/omarchy-syncd/config.toml"
 LEGACY_CONFIG="$HOME/.config/syncd/config.toml"
 
+ask_yes_no() {
+  local prompt="$1"
+  local answer
+  while true; do
+    if ! read -r -p "$prompt [y/n] " answer; then
+      return 2
+    fi
+    answer=${answer,,}
+    case "$answer" in
+      y|yes) return 0 ;;
+      n|no) return 1 ;;
+      *) echo "Please answer 'y' or 'n'." ;;
+    esac
+  done
+}
+
 if [ -f "$LEGACY_CONFIG" ] && [ ! -f "$CONFIG_PATH" ]; then
   echo
   echo "Migrating legacy config from ~/.config/syncd to ~/.config/omarchy-syncd..."
@@ -61,47 +77,32 @@ if ! git config --global --get user.name >/dev/null 2>&1 || \
   exit 1
 fi
 
-set +e
-read -r -p "Would you like to create a config now? [Y/n] " init_choice
-status=$?
-set -e
-if [ $status -ne 0 ]; then
-  echo
-  echo "Input closed unexpectedly; skipping configuration. Run 'omarchy-syncd init --repo-url <remote>' later."
-  exit 0
-fi
-
-init_choice=${init_choice:-Y}
-
-if [[ "$init_choice" =~ ^[Yy]$ ]]; then
+ask_yes_no "Would you like to create a config now?"
+init_status=$?
+if [ $init_status -eq 0 ]; then
   repo_url=""
   if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-    set +e
-    read -r -p "Create a new private GitHub repository via gh? [Y/n] " create_repo_choice
-    status=$?
-    set -e
-    if [ $status -ne 0 ]; then
-      echo
-      echo "Input closed unexpectedly; skipping configuration. Run 'omarchy-syncd init --repo-url <remote>' later."
-      exit 0
-    fi
-    create_repo_choice=${create_repo_choice:-Y}
-    if [[ "$create_repo_choice" =~ ^[Yy]$ ]]; then
+    ask_yes_no "Create a new private GitHub repository via gh?"
+    create_repo_status=$?
+    if [ $create_repo_status -eq 0 ]; then
       gh_user="$(gh api user -q '.login' 2>/dev/null || true)"
       default_repo="${gh_user:+$gh_user/}omarchy-dotfiles"
       if [ -z "$default_repo" ]; then
         default_repo="omarchy-dotfiles"
       fi
-      read -r -p "GitHub repository (owner/name) [$default_repo]: " repo_full
-      repo_full=${repo_full:-$default_repo}
-      if [[ "$repo_full" != */* ]]; then
-        if [ -n "$gh_user" ]; then
-          repo_full="$gh_user/$repo_full"
-        else
-          echo "Unable to determine GitHub username. Specify repo as owner/name."
-          exit 1
+      while true; do
+        read -r -p "GitHub repository (owner/name) [$default_repo]: " repo_full
+        repo_full=${repo_full:-$default_repo}
+        if [[ "$repo_full" != */* ]]; then
+          if [ -n "$gh_user" ]; then
+            repo_full="$gh_user/$repo_full"
+          else
+            echo "Unable to determine GitHub username. Specify repo as owner/name."
+            continue
+          fi
         fi
-      fi
+        break
+      done
       if gh repo view "$repo_full" >/dev/null 2>&1; then
         echo "GitHub repository $repo_full already exists; using existing remote."
         repo_url="git@github.com:${repo_full}.git"
@@ -116,6 +117,10 @@ if [[ "$init_choice" =~ ^[Yy]$ ]]; then
           exit 1
         fi
       fi
+    elif [ $create_repo_status -eq 2 ]; then
+      echo
+      echo "Input closed unexpectedly; skipping configuration. Run 'omarchy-syncd init --repo-url <remote>' later."
+      exit 0
     fi
   else
     if command -v gh >/dev/null 2>&1; then
@@ -169,14 +174,22 @@ if [[ "$init_choice" =~ ^[Yy]$ ]]; then
   read -r -p "Branch name to track [main]: " branch_name
   branch_name=${branch_name:-main}
 
-  read -r -p "Include Omarchy default paths bundle? [Y/n] " include_defaults_choice
-  include_defaults_choice=${include_defaults_choice:-Y}
+  include_defaults_choice=false
+  ask_yes_no "Include Omarchy default path bundles?"
+  include_status=$?
+  if [ $include_status -eq 0 ]; then
+    include_defaults_choice=true
+  elif [ $include_status -eq 2 ]; then
+    echo
+    echo "Input closed unexpectedly; skipping configuration. Run 'omarchy-syncd init --repo-url <remote>' later."
+    exit 0
+  fi
 
   read -r -p "Additional paths (comma-separated, optional): " extra_paths
 
   args=("$INSTALLED_BIN" "init" "--repo-url" "$repo_url" "--branch" "$branch_name")
 
-  if [[ "$include_defaults_choice" =~ ^[Yy]$ ]]; then
+  if [ "$include_defaults_choice" = true ]; then
     args+=("--include-defaults")
   fi
 
@@ -196,28 +209,27 @@ if [[ "$init_choice" =~ ^[Yy]$ ]]; then
   "${args[@]}"
   echo "Configuration written to $CONFIG_PATH"
 
-  set +e
-  read -r -p "Run an initial backup now? [Y/n] " backup_choice
-  status=$?
-  set -e
-  if [ $status -ne 0 ]; then
+  ask_yes_no "Run an initial backup now?"
+  backup_status=$?
+  if [ $backup_status -eq 0 ]; then
+    echo
+    echo "Running initial backup..."
+    if "$INSTALLED_BIN" backup; then
+      echo "Initial backup completed."
+    else
+      echo "Initial backup failed. Resolve the issue above and rerun 'omarchy-syncd backup'."
+    fi
+  elif [ $backup_status -eq 2 ]; then
     echo
     echo "Input closed unexpectedly; skipping initial backup. Run 'omarchy-syncd backup' later."
   else
-    backup_choice=${backup_choice:-Y}
-    if [[ "$backup_choice" =~ ^[Yy]$ ]]; then
-      echo
-      echo "Running initial backup..."
-      if "$INSTALLED_BIN" backup; then
-        echo "Initial backup completed."
-      else
-        echo "Initial backup failed. Resolve the issue above and rerun 'omarchy-syncd backup'."
-      fi
-    else
-      echo
-      echo "Skipping initial backup. Run 'omarchy-syncd backup' whenever you're ready."
-    fi
+    echo
+    echo "Skipping initial backup. Run 'omarchy-syncd backup' whenever you're ready."
   fi
+elif [ $init_status -eq 2 ]; then
+  echo
+  echo "Input closed unexpectedly; skipping configuration. Run 'omarchy-syncd init --repo-url <remote>' later."
+  exit 0
 else
   echo
   echo "Skipping configuration. Run 'omarchy-syncd init --repo-url <remote>' later to set it up."
