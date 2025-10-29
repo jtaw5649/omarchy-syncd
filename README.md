@@ -20,7 +20,7 @@ You only need Rust’s toolchain (`cargo`) for these steps; runtime dependencies
 
 ### Commands
 
-- `init` – writes `~/.config/omarchy-syncd/config.toml`. Repeat `--path` to track multiple files or directories. Add `--include-defaults` to prefill the Omarchy bundle (Hypr, Waybar, Omarchy, Alacritty, Ghostty, Kitty, btop, fastfetch, Neovim, Walker, SwayOSD, eza, cava). Pass `--verify-remote` if you want to check the remote branch immediately.
+- `init` – writes `~/.config/omarchy-syncd/config.toml`. Repeat `--path` to track multiple files or directories. Add `--include-defaults` to prefill the Omarchy bundle (Hypr, Waybar, Omarchy, Alacritty, Ghostty, Kitty, btop, fastfetch, Neovim, Walker, SwayOSD, eza, cava, aether, elephant, wayvnc, systemd, Typora, gh). Pass `--verify-remote` if you want to check the remote branch immediately.
 - `backup` – clones the remote repo to a temporary directory, copies the tracked files into it, commits, and pushes. If there are no changes it exits cleanly without pushing.
 - `restore` – clones the remote repo to a temporary directory and copies tracked files back into `$HOME` (overwriting existing files/directories).
 
@@ -44,6 +44,12 @@ If you run `init` with `--include-defaults`, the following paths are tracked aut
 ~/.config/cava
 ~/.config/git
 ~/.config/lazygit
+~/.config/aether
+~/.config/elephant
+~/.config/wayvnc
+~/.config/systemd
+~/.config/Typora
+~/.config/gh
 ```
 
 Missing directories are skipped during backup with a friendly message.

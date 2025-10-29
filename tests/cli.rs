@@ -177,7 +177,31 @@ fn init_with_defaults_and_extra_path_writes_config() -> Result<()> {
             .contains(&"~/.config/custom-app".to_string())
     );
 
-    for expected in ["~/.config/hypr", "~/.config/nvim", "~/.config/kitty"] {
+    let expected_defaults = [
+        "~/.config/hypr",
+        "~/.config/waybar",
+        "~/.config/omarchy",
+        "~/.config/alacritty",
+        "~/.config/ghostty",
+        "~/.config/kitty",
+        "~/.config/btop",
+        "~/.config/fastfetch",
+        "~/.config/nvim",
+        "~/.config/walker",
+        "~/.config/swayosd",
+        "~/.config/eza",
+        "~/.config/cava",
+        "~/.config/git",
+        "~/.config/lazygit",
+        "~/.config/aether",
+        "~/.config/elephant",
+        "~/.config/wayvnc",
+        "~/.config/systemd",
+        "~/.config/Typora",
+        "~/.config/gh",
+    ];
+
+    for expected in expected_defaults {
         assert!(
             cfg.files.paths.contains(&expected.to_string()),
             "missing default {expected}"

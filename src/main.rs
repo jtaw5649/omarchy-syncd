@@ -25,6 +25,12 @@ const DEFAULT_PATHS: &[&str] = &[
     "~/.config/cava",
     "~/.config/git",
     "~/.config/lazygit",
+    "~/.config/aether",
+    "~/.config/elephant",
+    "~/.config/wayvnc",
+    "~/.config/systemd",
+    "~/.config/Typora",
+    "~/.config/gh",
 ];
 
 #[derive(Parser)]
