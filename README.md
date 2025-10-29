@@ -76,14 +76,20 @@ paths = [
 - Repositories are cloned into a temporary directory for each run, so there is no long-lived local staging area—your private GitHub repository is the source of truth.
 - Symlink information (for example `~/.config/omarchy/current/theme`) is stored inside the backup at `.config/omarchy-syncd/symlinks.json`, and `restore` writes a copy to `~/.config/omarchy-syncd/symlinks.json` on each machine so theme links stay intact. **Do not delete this JSON file**—without it, Omarchy theme symlinks and other link-based configs cannot be reconstructed during `restore`.
 - After `restore` completes the tool runs `hyprctl reload` (if available) to pick up the updated configuration.
-- The helper script `scripts/omarchy-syncd-menu.sh` launches `omarchy-syncd menu`; wire it to Super+Alt+Space (or your preferred launcher) to mirror the Omarchy desktop workflow. The installer can add the Walker entry for you, or use the snippet below.
+- The helper script `scripts/omarchy-syncd-menu.sh` launches `omarchy-syncd menu`; wire it to Super+Alt+Space (or your preferred launcher) to mirror the Omarchy desktop workflow. The installer can generate the Elephant menu automatically, or replicate the snippet below.
 - **Launcher integration:**
-  - *Walker:* Add a command entry to `~/.config/walker/config.toml` (create the file if it does not exist). Adjust the path if you installed somewhere other than `~/.local/bin`:
+  - *Elephant menu:* Create `~/.config/elephant/menus/omarchy-syncd.toml` so the `menus` provider exposes the Omarchy entry:
     ```toml
-    [[commands]]
-    name = "Omarchy Syncd"
-    exec = "~/.local/bin/omarchy-syncd-menu"
-    category = "Setup"
+    # Managed by omarchy-syncd
+    name = "omarchy-syncd"
+    name_pretty = "Omarchy Syncd"
+    icon = "applications-system"
+    global_search = true
+
+    [[entries]]
+    text = "Omarchy Syncd"
+    keywords = ["backup", "restore", "install", "config"]
+    actions = { "open" = "~/.local/bin/omarchy-syncd-menu" }
     ```
-    Restart Walker (or reload its config) and the entry will appear in the Install menu.
+    Restart Elephant (for example `pkill elephant && elephant &`) so launchers pick up the updated menu.
   - *Hyprland:* Bind `scripts/omarchy-syncd-menu.sh` (or `omarchy-syncd menu`) to your preferred key combination, e.g. Super+Alt+Space.

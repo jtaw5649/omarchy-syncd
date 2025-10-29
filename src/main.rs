@@ -3,7 +3,7 @@ use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -497,7 +497,7 @@ fn cmd_uninstall(args: UninstallArgs) -> Result<()> {
             .with_context(|| format!("Failed removing {}", config_dir.display()))?;
     }
 
-    remove_walker_entry(&bin_dir)?;
+    remove_elephant_menu()?;
 
     println!("omarchy-syncd has been uninstalled.");
     Ok(())
@@ -798,71 +798,23 @@ fn print_selection(bundles: &[String], paths: &[String]) {
     }
 }
 
-fn remove_walker_entry(bin_dir: &Path) -> Result<()> {
-    let home = match env::var_os("HOME") {
-        Some(val) => PathBuf::from(val),
-        None => return Ok(()),
-    };
-    let config_path = home.join(".config/walker/config.toml");
-    if !config_path.exists() {
-        return Ok(());
-    }
-
-    let exec_marker = format!("exec = \"{}/omarchy-syncd-menu\"", bin_dir.display());
-    let mut content = fs::read_to_string(&config_path)?;
-    let mut changed = false;
-    let mut search_start = 0usize;
-    loop {
-        let slice = &content[search_start..];
-        let Some(rel_idx) = slice.find("[[commands]]") else {
-            break;
-        };
-        let idx = search_start + rel_idx;
-        let rest = &content[idx + "[[commands]]".len()..];
-        let block_end = rest
-            .find("[[commands]]")
-            .map(|offset| idx + "[[commands]]".len() + offset);
-        let end_idx = block_end.unwrap_or(content.len());
-        let block = &content[idx..end_idx];
-        if block.contains(&exec_marker) {
-            // Remove the block and any trailing blank lines
-            let mut removal_end = end_idx;
-            while removal_end < content.len() && content.as_bytes()[removal_end] == b'\n' {
-                removal_end += 1;
-            }
-            content.replace_range(idx..removal_end, "");
-            changed = true;
-            search_start = idx;
-        } else {
-            search_start = end_idx;
-        }
-    }
-
-    if changed {
-        // Normalize to ensure at most a single trailing newline
-        let trimmed = content.trim_end_matches('\n');
-        let mut output = trimmed.to_string();
-        if !output.is_empty() {
-            output.push('\n');
-        }
-        fs::write(&config_path, output)?;
-        restart_walker()?;
-    }
-
-    Ok(())
+fn elephant_menu_path() -> Result<PathBuf> {
+    let home = env::var_os("HOME").context("HOME environment variable is not set")?;
+    Ok(PathBuf::from(home).join(".config/elephant/menus/omarchy-syncd.toml"))
 }
 
-fn restart_walker() -> Result<()> {
-    if which("walker").is_err() {
-        return Ok(());
+fn remove_elephant_menu() -> Result<()> {
+    let path = elephant_menu_path()?;
+    remove_file_if_exists(&path)?;
+    if let Some(parent) = path.parent() {
+        if parent.is_dir()
+            && parent
+                .read_dir()
+                .map(|mut it| it.next().is_none())
+                .unwrap_or(false)
+        {
+            let _ = fs::remove_dir(parent);
+        }
     }
-
-    let _ = Command::new("pkill").arg("-x").arg("walker").status();
-    Command::new("walker")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("Failed to relaunch walker")?;
-
     Ok(())
 }

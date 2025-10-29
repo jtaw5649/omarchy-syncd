@@ -98,6 +98,41 @@ ask_yes_no() {
   done
 }
 
+write_elephant_menu() {
+  local menu_dir="$HOME/.config/elephant/menus"
+  local menu_path="$menu_dir/omarchy-syncd.toml"
+  local tmp
+
+  mkdir -p "$menu_dir"
+  tmp="$(mktemp)"
+  cat >"$tmp" <<EOF
+# Managed by omarchy-syncd
+name = "omarchy-syncd"
+name_pretty = "Omarchy Syncd"
+icon = "applications-system"
+global_search = true
+
+[[entries]]
+text = "Omarchy Syncd"
+keywords = ["backup", "restore", "install", "config"]
+actions = { "open" = "$TARGET_DIR/omarchy-syncd-menu" }
+EOF
+
+  if [ -f "$menu_path" ] && ! grep -q "# Managed by omarchy-syncd" "$menu_path"; then
+    echo "Existing Elephant menu at $menu_path is not managed by omarchy-syncd; leaving it untouched."
+    rm -f "$tmp"
+    return
+  fi
+
+  if ! cmp -s "$tmp" "$menu_path"; then
+    mv "$tmp" "$menu_path"
+    echo "Wrote Elephant menu to $menu_path."
+  else
+    rm -f "$tmp"
+    echo "Elephant menu already up to date at $menu_path."
+  fi
+}
+
 if [ -f "$LEGACY_CONFIG" ] && [ ! -f "$CONFIG_PATH" ]; then
   echo
   echo "Migrating legacy config from ~/.config/syncd to ~/.config/omarchy-syncd..."
@@ -280,37 +315,6 @@ if [ $SKIP_INIT -eq 0 ]; then
     echo "Skipping initial backup. Run 'omarchy-syncd backup' whenever you're ready."
   fi
 
-  ask_yes_no "Add a Walker launcher entry for omarchy-syncd?"
-  walker_status=$?
-  if [ $walker_status -eq 0 ]; then
-    WALKER_CONFIG="$HOME/.config/walker/config.toml"
-    mkdir -p "$(dirname "$WALKER_CONFIG")"
-    if ! grep -Fq "$TARGET_DIR/omarchy-syncd-menu" "$WALKER_CONFIG" 2>/dev/null; then
-      {
-        [ -s "$WALKER_CONFIG" ] && echo
-        cat <<WALKER_ENTRY
-[[commands]]
-name = "Omarchy Syncd"
-exec = "$TARGET_DIR/omarchy-syncd-menu"
-category = "Setup"
-WALKER_ENTRY
-      } >>"$WALKER_CONFIG"
-      echo "Added Walker command to $WALKER_CONFIG."
-      if command -v walker >/dev/null 2>&1; then
-        pkill walker >/dev/null 2>&1 || true
-        walker >/dev/null 2>&1 &
-        disown || true
-      fi
-    else
-      echo "Walker configuration already contains an omarchy-syncd entry; skipping."
-    fi
-  elif [ $walker_status -eq 2 ]; then
-    echo
-    echo "Input closed unexpectedly; skipping Walker configuration.";
-  else
-    echo
-    echo "Skipping Walker integration. You can add it later in ~/.config/walker/config.toml."
-  fi
   elif [ $init_status -eq 2 ]; then
     echo
     echo "Input closed unexpectedly; skipping configuration. Run 'omarchy-syncd config --write --repo-url <remote> ...' later."
@@ -322,35 +326,18 @@ WALKER_ENTRY
 fi
 
 if [ -t 0 ]; then
-  ask_yes_no "Add a Walker launcher entry for omarchy-syncd?"
-  walker_status=$?
-  if [ $walker_status -eq 0 ]; then
-    WALKER_CONFIG="$HOME/.config/walker/config.toml"
-    mkdir -p "$(dirname "$WALKER_CONFIG")"
-    if ! grep -Fq "$TARGET_DIR/omarchy-syncd-menu" "$WALKER_CONFIG" 2>/dev/null; then
-      {
-        [ -s "$WALKER_CONFIG" ] && echo
-        cat <<WALKER_ENTRY
-[[commands]]
-name = "Omarchy Syncd"
-exec = "$TARGET_DIR/omarchy-syncd-menu"
-category = "Setup"
-WALKER_ENTRY
-      } >>"$WALKER_CONFIG"
-      echo "Added Walker command to $WALKER_CONFIG."
-      if command -v walker >/dev/null 2>&1; then
-        pkill walker >/dev/null 2>&1 || true
-        walker >/dev/null 2>&1 &
-        disown || true
-      fi
-    else
-      echo "Walker configuration already contains an omarchy-syncd entry; skipping."
+  ask_yes_no "Create or update the Elephant menu entry for omarchy-syncd?"
+  menu_status=$?
+  if [ $menu_status -eq 0 ]; then
+    write_elephant_menu
+    if pgrep -x elephant >/dev/null 2>&1; then
+      echo "Elephant is running; restart it to pick up the updated menu (e.g. pkill elephant && elephant &)."
     fi
-  elif [ $walker_status -eq 2 ]; then
+  elif [ $menu_status -eq 2 ]; then
     echo
-    echo "Input closed unexpectedly; skipping Walker configuration.";
+    echo "Input closed unexpectedly; skipping Elephant menu setup."
   else
     echo
-    echo "Skipping Walker integration. You can add it later in ~/.config/walker/config.toml."
+    echo "Skipping Elephant menu integration. You can add it later in ~/.config/elephant/menus/omarchy-syncd.toml."
   fi
 fi
