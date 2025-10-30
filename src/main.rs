@@ -616,11 +616,21 @@ fn interactive_selection(
     current_paths: &[String],
 ) -> Result<SelectionResult> {
     let header = "Tab toggles, Shift+Tab selects all, Enter confirms, Esc cancels";
+    let max_bundle_name_len = bundles::all()
+        .iter()
+        .map(|bundle| bundle.name.len())
+        .max()
+        .unwrap_or(0);
     let bundle_choices: Vec<Choice> = bundles::all()
         .iter()
         .map(|bundle| Choice {
             id: bundle.id.to_string(),
-            label: format!("{:<13} {}", bundle.name, bundle.description),
+            label: format!(
+                "{name:<width$}  {description}",
+                name = bundle.name,
+                description = bundle.description,
+                width = max_bundle_name_len
+            ),
         })
         .collect();
     let mut bundle_selection = selector::multi_select(
@@ -821,6 +831,22 @@ fn elephant_icon_path() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".local/share/icons/omarchy-syncd.png"))
 }
 
+fn elephant_icon_path() -> Result<PathBuf> {
+    if let Some(data_home) = env::var_os("XDG_DATA_HOME") {
+        return Ok(PathBuf::from(data_home).join("icons/omarchy-syncd.png"));
+    }
+    let home = env::var_os("HOME").context("HOME environment variable is not set")?;
+    Ok(PathBuf::from(home).join(".local/share/icons/omarchy-syncd.png"))
+}
+
+fn elephant_icon_path() -> Result<PathBuf> {
+    if let Some(data_home) = env::var_os("XDG_DATA_HOME") {
+        return Ok(PathBuf::from(data_home).join("icons/omarchy-syncd.png"));
+    }
+    let home = env::var_os("HOME").context("HOME environment variable is not set")?;
+    Ok(PathBuf::from(home).join(".local/share/icons/omarchy-syncd.png"))
+}
+
 fn remove_elephant_menu() -> Result<()> {
     let path = elephant_menu_path()?;
     remove_file_if_exists(&path)?;
@@ -834,6 +860,18 @@ fn remove_elephant_menu() -> Result<()> {
             let _ = fs::remove_dir(parent);
         }
     }
+    Ok(())
+}
+
+fn remove_elephant_icon() -> Result<()> {
+    let path = elephant_icon_path()?;
+    remove_file_if_exists(&path)?;
+    Ok(())
+}
+
+fn remove_elephant_icon() -> Result<()> {
+    let path = elephant_icon_path()?;
+    remove_file_if_exists(&path)?;
     Ok(())
 }
 

@@ -1,29 +1,28 @@
-use std::{borrow::Cow, sync::Arc};
-
 use anyhow::{Result, anyhow};
 use skim::prelude::*;
 
 #[derive(Clone)]
 struct SelectableItem {
-    line: String,
+    id: String,
+    display: String,
 }
 
 impl SelectableItem {
     fn new(id: impl Into<String>, display: impl Into<String>) -> Self {
-        let id_str = id.into();
-        let label_str = display.into();
-        let mut line = id_str.clone();
-        if !label_str.is_empty() {
-            line.push('\t');
-            line.push_str(&label_str);
+        Self {
+            id: id.into(),
+            display: display.into(),
         }
-        Self { line }
     }
 }
 
 impl SkimItem for SelectableItem {
     fn text(&self) -> Cow<'_, str> {
-        Cow::Borrowed(self.line.as_str())
+        Cow::Borrowed(self.display.as_str())
+    }
+
+    fn output(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.id.as_str())
     }
 }
 
@@ -69,12 +68,8 @@ pub fn multi_select(
         .selected_items
         .iter()
         .map(|item| {
-            let raw = item.text();
-            let raw_str = raw.as_ref();
-            raw_str
-                .split_once('\t')
-                .map(|(id, _)| id.to_string())
-                .unwrap_or_else(|| raw_str.to_string())
+            let raw = item.output();
+            raw.as_ref().to_string()
         })
         .collect();
     Ok(selected)
@@ -91,7 +86,6 @@ pub fn single_select(
     }
 
     let binds: Vec<&str> = extra_binds.iter().copied().collect();
-
     let options = SkimOptionsBuilder::default()
         .multi(false)
         .prompt(Some(prompt))
@@ -112,11 +106,5 @@ pub fn single_select(
         anyhow::bail!("Selection cancelled");
     }
 
-    let raw = output.selected_items[0].text();
-    let raw_str = raw.as_ref();
-    let selected = raw_str
-        .split_once('\t')
-        .map(|(id, _)| id.to_string())
-        .unwrap_or_else(|| raw_str.to_string());
-    Ok(selected)
+    Ok(output.selected_items[0].output().to_string())
 }
