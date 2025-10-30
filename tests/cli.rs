@@ -13,23 +13,6 @@ use walkdir::WalkDir;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 
-#[derive(Deserialize)]
-struct RepoConfig {
-    url: String,
-    branch: String,
-}
-
-#[derive(Deserialize)]
-struct FileConfig {
-    paths: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct SyncConfig {
-    repo: RepoConfig,
-    files: FileConfig,
-}
-
 fn path_str(path: &Path) -> Result<&str> {
     path.to_str()
         .context("Path contains invalid UTF-8 characters, which git cannot handle in these tests")
@@ -148,7 +131,8 @@ fn init_with_defaults_and_extra_path_writes_config() -> Result<()> {
 
     base_command(&home)
         .args([
-            "init",
+            "config",
+            "--write",
             "--repo-url",
             path_str(&remote)?,
             "--include-defaults",
@@ -160,7 +144,7 @@ fn init_with_defaults_and_extra_path_writes_config() -> Result<()> {
 
     let config_path = find_config_file(&home)?;
     let raw = fs::read_to_string(&config_path)?;
-    let cfg: SyncConfig = toml::from_str(&raw)?;
+    let cfg: omarchy_syncd::config::SyncConfig = toml::from_str(&raw)?;
 
     assert_eq!(cfg.repo.url, path_str(&remote)?);
     assert_eq!(cfg.repo.branch, "main");
@@ -177,35 +161,23 @@ fn init_with_defaults_and_extra_path_writes_config() -> Result<()> {
             .contains(&"~/.config/custom-app".to_string())
     );
 
-    let expected_defaults = [
-        "~/.config/hypr",
-        "~/.config/waybar",
-        "~/.config/omarchy",
-        "~/.config/alacritty",
-        "~/.config/ghostty",
-        "~/.config/kitty",
-        "~/.config/btop",
-        "~/.config/fastfetch",
-        "~/.config/nvim",
-        "~/.config/walker",
-        "~/.config/swayosd",
-        "~/.config/eza",
-        "~/.config/cava",
-        "~/.config/git",
-        "~/.config/lazygit",
-        "~/.config/aether",
-        "~/.config/elephant",
-        "~/.config/wayvnc",
-        "~/.config/systemd",
-        "~/.config/Typora",
-        "~/.config/gh",
-    ];
+    let mut expected_bundles: Vec<String> = omarchy_syncd::bundles::DEFAULT_BUNDLE_IDS
+        .iter()
+        .map(|id| id.to_string())
+        .collect();
+    expected_bundles.sort();
+    assert_eq!(cfg.files.bundles, expected_bundles, "default bundle set");
 
-    for expected in expected_defaults {
-        assert!(
-            cfg.files.paths.contains(&expected.to_string()),
-            "missing default {expected}"
-        );
+    let resolved = cfg.resolved_paths()?;
+    let resolved_set: HashSet<_> = resolved.into_iter().collect();
+    for bundle_id in omarchy_syncd::bundles::DEFAULT_BUNDLE_IDS {
+        let bundle = omarchy_syncd::bundles::find(bundle_id).expect("bundle should exist");
+        for path in bundle.paths {
+            assert!(
+                resolved_set.contains(&path.to_string()),
+                "missing {path} from resolved defaults"
+            );
+        }
     }
 
     Ok(())
@@ -250,7 +222,8 @@ fn backup_and_restore_roundtrip() -> Result<()> {
 
     base_command(&home)
         .args([
-            "init",
+            "config",
+            "--write",
             "--repo-url",
             path_str(&remote)?,
             "--include-defaults",
@@ -348,6 +321,256 @@ fn backup_and_restore_roundtrip() -> Result<()> {
 }
 
 #[test]
+fn init_accepts_bundle_flags() -> Result<()> {
+    let temp = tempdir()?;
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home)?;
+
+    let remote = init_remote_repo(temp.path(), "remote-bundle.git")?;
+
+    base_command(&home)
+        .args([
+            "config",
+            "--write",
+            "--repo-url",
+            path_str(&remote)?,
+            "--bundle",
+            "core_desktop",
+        ])
+        .assert()
+        .success();
+
+    let config_path = find_config_file(&home)?;
+    let raw = fs::read_to_string(&config_path)?;
+    let cfg: omarchy_syncd::config::SyncConfig = toml::from_str(&raw)?;
+
+    assert_eq!(
+        cfg.files.bundles,
+        vec!["core_desktop".to_string()],
+        "bundle flag should be persisted"
+    );
+    assert!(
+        cfg.files.paths.is_empty(),
+        "no explicit paths expected when only bundle flag is set"
+    );
+
+    let resolved = cfg.resolved_paths()?;
+    let resolved_set: HashSet<_> = resolved.into_iter().collect();
+    let bundle = omarchy_syncd::bundles::find("core_desktop").expect("core bundle exists");
+    for path in bundle.paths {
+        assert!(
+            resolved_set.contains(&path.to_string()),
+            "resolved bundle should include {path}"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn install_command_updates_config_via_cli() -> Result<()> {
+    let temp = tempdir()?;
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home)?;
+
+    let remote = init_remote_repo(temp.path(), "remote-install.git")?;
+
+    base_command(&home)
+        .args([
+            "config",
+            "--write",
+            "--repo-url",
+            path_str(&remote)?,
+            "--bundle",
+            "core_desktop",
+        ])
+        .assert()
+        .success();
+
+    base_command(&home)
+        .args([
+            "install",
+            "--bundle",
+            "terminals",
+            "--bundle",
+            "dev_git",
+            "--path",
+            "~/.config/custom-app",
+            "--no-ui",
+        ])
+        .assert()
+        .success();
+
+    let config_path = find_config_file(&home)?;
+    let raw = fs::read_to_string(&config_path)?;
+    let cfg: omarchy_syncd::config::SyncConfig = toml::from_str(&raw)?;
+
+    assert_eq!(
+        cfg.files.paths,
+        vec!["~/.config/custom-app".to_string()],
+        "install should persist explicit path selections"
+    );
+
+    let mut expected_bundles = vec!["dev_git".to_string(), "terminals".to_string()];
+    expected_bundles.sort();
+    assert_eq!(
+        cfg.files.bundles, expected_bundles,
+        "install should replace bundle selection"
+    );
+
+    let resolved = cfg.resolved_paths()?;
+    let resolved_set: HashSet<_> = resolved.into_iter().collect();
+    for path in omarchy_syncd::bundles::find("terminals").unwrap().paths {
+        assert!(resolved_set.contains(&path.to_string()));
+    }
+    for path in omarchy_syncd::bundles::find("dev_git").unwrap().paths {
+        assert!(resolved_set.contains(&path.to_string()));
+    }
+    assert!(resolved_set.contains(&"~/.config/custom-app".to_string()));
+
+    Ok(())
+}
+
+#[test]
+fn backup_respects_path_flag() -> Result<()> {
+    let temp = tempdir()?;
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home)?;
+
+    let remote = init_remote_repo(temp.path(), "remote-selective.git")?;
+
+    let hypr_conf = home.join(".config/hypr/hyprland.conf");
+    fs::create_dir_all(hypr_conf.parent().unwrap())?;
+    fs::write(&hypr_conf, "monitor = DP-1\n")?;
+
+    let nvim_conf = home.join(".config/nvim/init.lua");
+    fs::create_dir_all(nvim_conf.parent().unwrap())?;
+    fs::write(&nvim_conf, "print('hello')\n")?;
+
+    base_command(&home)
+        .args([
+            "config",
+            "--write",
+            "--repo-url",
+            path_str(&remote)?,
+            "--path",
+            "~/.config/hypr",
+            "--path",
+            "~/.config/nvim",
+        ])
+        .assert()
+        .success();
+
+    base_command(&home)
+        .args(["backup", "--path", "~/.config/hypr", "--no-ui"])
+        .assert()
+        .success();
+
+    let checkout = temp.path().join("checkout-selective");
+    run_git(
+        Some(temp.path()),
+        &["clone", path_str(&remote)?, path_str(&checkout)?],
+    )?;
+
+    assert!(checkout.join(".config/hypr/hyprland.conf").exists());
+    assert!(
+        !checkout.join(".config/nvim/init.lua").exists(),
+        "nvim config should not be backed up when excluded"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn restore_respects_path_flag() -> Result<()> {
+    let temp = tempdir()?;
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home)?;
+
+    let remote = init_remote_repo(temp.path(), "remote-selective-restore.git")?;
+
+    let hypr_conf = home.join(".config/hypr/hyprland.conf");
+    fs::create_dir_all(hypr_conf.parent().unwrap())?;
+    fs::write(&hypr_conf, "monitor = DP-1\n")?;
+
+    let nvim_conf = home.join(".config/nvim/init.lua");
+    fs::create_dir_all(nvim_conf.parent().unwrap())?;
+    fs::write(&nvim_conf, "print('hello')\n")?;
+
+    base_command(&home)
+        .args([
+            "config",
+            "--write",
+            "--repo-url",
+            path_str(&remote)?,
+            "--path",
+            "~/.config/hypr",
+            "--path",
+            "~/.config/nvim",
+        ])
+        .assert()
+        .success();
+
+    base_command(&home)
+        .args(["backup", "--no-ui", "--all"])
+        .assert()
+        .success();
+
+    fs::remove_dir_all(hypr_conf.parent().unwrap())?;
+    fs::remove_dir_all(nvim_conf.parent().unwrap())?;
+
+    base_command(&home)
+        .args(["restore", "--path", "~/.config/hypr", "--no-ui"])
+        .assert()
+        .success();
+
+    assert!(
+        home.join(".config/hypr/hyprland.conf").exists(),
+        "hypr config should be restored"
+    );
+    assert!(
+        !home.join(".config/nvim/init.lua").exists(),
+        "nvim config should remain absent when excluded"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn config_prints_path() -> Result<()> {
+    let temp = tempdir()?;
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home)?;
+
+    let remote = init_remote_repo(temp.path(), "remote-config.git")?;
+
+    base_command(&home)
+        .args([
+            "config",
+            "--write",
+            "--repo-url",
+            path_str(&remote)?,
+            "--path",
+            "~/.config/hypr",
+        ])
+        .assert()
+        .success();
+
+    let output = base_command(&home)
+        .args(["config", "--print-path"])
+        .output()
+        .context("failed to run config --print-path")?;
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(
+        stdout.contains(".config/omarchy-syncd/config.toml"),
+        "config path should be printed"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn backup_initializes_empty_remote() -> Result<()> {
     let temp = tempdir()?;
     let home = temp.path().join("home");
@@ -361,7 +584,8 @@ fn backup_initializes_empty_remote() -> Result<()> {
 
     base_command(&home)
         .args([
-            "init",
+            "config",
+            "--write",
             "--repo-url",
             path_str(&remote)?,
             "--path",

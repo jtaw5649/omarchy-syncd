@@ -1,7 +1,9 @@
-use std::{fs, path::PathBuf};
+use std::{collections::BTreeSet, fs, path::PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+
+use crate::bundles;
 
 const CONFIG_DIR_NAME: &str = "omarchy-syncd";
 
@@ -15,6 +17,8 @@ pub struct RepoConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileConfig {
     pub paths: Vec<String>,
+    #[serde(default)]
+    pub bundles: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -25,12 +29,28 @@ pub struct SyncConfig {
 
 impl SyncConfig {
     pub fn ensure_non_empty_paths(&self) -> Result<()> {
-        if self.files.paths.is_empty() {
+        if self.resolved_paths()?.is_empty() {
             anyhow::bail!(
                 "No paths configured. Run 'omarchy-syncd init --path <path>' or rerun init with --include-defaults."
             );
         }
         Ok(())
+    }
+
+    pub fn resolved_paths(&self) -> Result<Vec<String>> {
+        let mut set: BTreeSet<String> = self.files.paths.iter().cloned().collect();
+        let from_bundles = bundles::resolve_paths(&self.files.bundles)?;
+        for path in from_bundles {
+            set.insert(path);
+        }
+        Ok(set.into_iter().collect())
+    }
+
+    pub fn sorted_bundles(&self) -> Vec<String> {
+        let mut bundles = self.files.bundles.clone();
+        bundles.sort();
+        bundles.dedup();
+        bundles
     }
 }
 
@@ -69,7 +89,12 @@ pub fn write_config(cfg: &SyncConfig) -> Result<()> {
     let dir = config_dir()?;
     fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create config directory {}", dir.display()))?;
-    let raw = toml::to_string_pretty(cfg)?;
+    let mut normalized = cfg.clone();
+    normalized.files.paths.sort();
+    normalized.files.paths.dedup();
+    normalized.files.bundles = normalized.sorted_bundles();
+    bundles::ensure_known(&normalized.files.bundles)?;
+    let raw = toml::to_string_pretty(&normalized)?;
     let path = dir.join("config.toml");
     fs::write(&path, raw)
         .with_context(|| format!("Failed to write config file {}", path.display()))?;

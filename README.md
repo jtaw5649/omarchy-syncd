@@ -3,54 +3,54 @@
 A minimal Rust utility for Omarchy users who want easy dotfile backups. It clones your private GitHub repository on demand into a temporary workspace and exposes a small CLI:
 
 ```text
-omarchy-syncd init --repo-url <remote> --path <file-or-dir> [--path ...]
+omarchy-syncd menu
 omarchy-syncd backup [-m "Commit message"]
 omarchy-syncd restore
+omarchy-syncd config [--print-path | --create | --write ...]
 ```
 
 ### Installation
 
-Pick whichever route matches your workflow:
+**Recommended (remote installer)**
 
+```bash
+curl -fsSL https://github.com/jtaw5649/omarchy-syncd/raw/main/install.sh | bash
+```
+
+The script clones the latest release into a temporary directory, runs the interactive installer, and cleans up automatically. Pass any flags after `--` to forward them to the installer (for example, a custom target directory).
+
+**Local checkout**
+
+- `git clone https://github.com/jtaw5649/omarchy-syncd && cd omarchy-syncd` then run `./install.sh`. The script detects the local clone and skips the bootstrap step.
 - `cargo install --path .` – installs straight into `~/.cargo/bin` (ensure it is on your `PATH`).
-- `./scripts/install.sh [target-dir]` – builds a release binary, copies it into the directory you specify (defaults to `~/.local/bin`), and runs an interactive setup: it can create a new private GitHub repository automatically via `gh repo create`, populate the config with the default path bundle, and add any extra paths you supply.
 - `cargo build --release` – then copy `target/release/omarchy-syncd` wherever you prefer.
 
-You only need Rust’s toolchain (`cargo`) for these steps; runtime dependencies are just `git` and a POSIX shell.
+The installer requires Rust’s toolchain (`cargo`), `git`, and a POSIX shell at install time; day-to-day usage only needs `git` and the `omarchy-syncd` binary.
 
 ### Commands
 
-- `init` – writes `~/.config/omarchy-syncd/config.toml`. Repeat `--path` to track multiple files or directories. Add `--include-defaults` to prefill the Omarchy bundle (Hypr, Waybar, Omarchy, Alacritty, Ghostty, Kitty, btop, fastfetch, Neovim, Walker, SwayOSD, eza, cava, aether, elephant, wayvnc, systemd, Typora, gh). Pass `--verify-remote` if you want to check the remote branch immediately.
-- `backup` – clones the remote repo to a temporary directory, copies the tracked files into it, commits, and pushes. If there are no changes it exits cleanly without pushing.
-- `restore` – clones the remote repo to a temporary directory and copies tracked files back into `$HOME` (overwriting existing files/directories).
+- `menu` – lightweight launcher UI with entries for Install, Backup, Restore, and Edit Config. This is what the wrapper scripts expose.
+- `backup` – clones the remote repo to a temporary directory, lets you choose which of the configured paths to include, then copies them, commits, and pushes. Use `--all`, `--no-ui`, or `--path <…>` to skip the selector in scripts. If there are no changes it exits cleanly without pushing.
+- `restore` – clones the remote repo to a temporary directory, lets you pick which tracked paths to restore, and copies them back into `$HOME` (overwriting existing files/directories). Use `--all`, `--no-ui`, or `--path <…>` to bypass the selector.
+- `install` – launches the multi-select installer so you can choose bundles and extra dotfiles (also usable non-interactively with `--bundle`, `--path`, and `--dry-run`).
+- `config` – prints or opens `~/.config/omarchy-syncd/config.toml`. Add `--print-path` to avoid launching an editor, use `--create` to ensure the file exists, or call `--write` with `--repo-url`, `--branch`, and optional `--bundle/--path` flags to generate a configuration non-interactively.
+- `uninstall` – removes the installed binaries, helper scripts, config directory, and Walker entry.
 
 ### Default path bundle
 
-If you run `init` with `--include-defaults`, the following paths are tracked automatically (you can still add extra `--path` flags):
+If you enable the "Include Omarchy default path bundles" option during the installer (or invoke `omarchy-syncd config --write --include-defaults ...`), the following bundles are tracked automatically (you can still layer more `--bundle` or `--path` flags):
 
-```
-~/.config/hypr
-~/.config/waybar
-~/.config/omarchy
-~/.config/alacritty
-~/.config/ghostty
-~/.config/kitty
-~/.config/btop
-~/.config/fastfetch
-~/.config/nvim
-~/.config/walker
-~/.config/swayosd
-~/.config/eza
-~/.config/cava
-~/.config/git
-~/.config/lazygit
-~/.config/aether
-~/.config/elephant
-~/.config/wayvnc
-~/.config/systemd
-~/.config/Typora
-~/.config/gh
-```
+| Bundle ID        | What it covers                                               |
+| ---------------- | ------------------------------------------------------------ |
+| `core_desktop`   | Hypr, Waybar, Omarchy assets, SwayOSD, WayVNC                |
+| `terminals`      | Alacritty, Ghostty, Kitty                                    |
+| `cli_tools`      | btop, fastfetch, eza, cava, Walker                           |
+| `editors`        | Neovim, Typora                                               |
+| `dev_git`        | git, lazygit, gh                                             |
+| `creative`       | Aether, Elephant                                             |
+| `system`         | User-level systemd units                                     |
+
+All selectors let you type to filter in place. **Tab** toggles the highlighted entry, **Shift+Tab** selects everything, **Enter** confirms, and **Esc** cancels. The installer shows every path from these bundles and lets you append any custom dotfile paths you want.
 
 Missing directories are skipped during backup with a friendly message.
 
@@ -76,3 +76,24 @@ paths = [
 - Repositories are cloned into a temporary directory for each run, so there is no long-lived local staging area—your private GitHub repository is the source of truth.
 - Symlink information (for example `~/.config/omarchy/current/theme`) is stored inside the backup at `.config/omarchy-syncd/symlinks.json`, and `restore` writes a copy to `~/.config/omarchy-syncd/symlinks.json` on each machine so theme links stay intact. **Do not delete this JSON file**—without it, Omarchy theme symlinks and other link-based configs cannot be reconstructed during `restore`.
 - After `restore` completes the tool runs `hyprctl reload` (if available) to pick up the updated configuration.
+- The helper script `scripts/omarchy-syncd-menu.sh` launches `omarchy-syncd menu`; wire it to Super+Alt+Space (or your preferred launcher) to mirror the Omarchy desktop workflow. The installer can generate the Elephant menu automatically, or replicate the snippet below.
+- **Launcher integration:**
+  - *Elephant menu:* Create `~/.config/elephant/menus/omarchy-syncd.toml` so the `menus` provider exposes the Omarchy entry:
+    ```toml
+    # Managed by omarchy-syncd
+    name = "omarchy-syncd"
+    name_pretty = "Omarchy Syncd"
+    icon = "~/.local/share/icons/omarchy-syncd.png"
+    global_search = true
+    action = "launch"
+
+    [actions]
+    launch = "~/.local/bin/omarchy-syncd-menu"
+
+    [[entries]]
+    text = "Omarchy Syncd"
+    keywords = ["backup", "restore", "install", "config"]
+    terminal = true
+    ```
+    Restart Elephant (for example `pkill elephant && elephant &`) so launchers pick up the updated menu.
+  - *Hyprland:* Bind `scripts/omarchy-syncd-menu.sh` (or `omarchy-syncd menu`) to your preferred key combination, e.g. Super+Alt+Space.
