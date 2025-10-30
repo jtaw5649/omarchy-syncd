@@ -90,7 +90,7 @@ paths = [
 - After `restore` completes the tool runs `hyprctl reload` (if available) to pick up the updated configuration.
 - The helper script `scripts/omarchy-syncd-menu.sh` launches `omarchy-syncd menu`; wire it to Super+Alt+Space (or your preferred launcher) to mirror the Omarchy desktop workflow. The installer can generate the Elephant menu automatically, or replicate the snippet below.
 - **Launcher integration:**
-  - *Elephant menu:* Create `~/.config/elephant/menus/omarchy-syncd.toml` so the `menus` provider exposes the Omarchy entry:
+  - *Elephant menu:* The installer offers to create/update the menu entry for you (and skips it only if you decline or run non-interactively). If you need to recreate it manually, drop the following into `~/.config/elephant/menus/omarchy-syncd.toml`:
     ```toml
     # Managed by omarchy-syncd
     name = "omarchy-syncd"
@@ -107,5 +107,5 @@ paths = [
     keywords = ["backup", "restore", "install", "config"]
     terminal = true
     ```
-    Restart Elephant (for example `pkill elephant && elephant &`) so launchers pick up the updated menu.
+    Restart Elephant (for example `pkill elephant && elephant &`) if you restore the file manually.
   - *Hyprland:* Bind `scripts/omarchy-syncd-menu.sh` (or `omarchy-syncd menu`) to your preferred key combination, e.g. Super+Alt+Space.
