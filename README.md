@@ -83,13 +83,17 @@ paths = [
     # Managed by omarchy-syncd
     name = "omarchy-syncd"
     name_pretty = "Omarchy Syncd"
-    icon = "applications-system"
+    icon = "~/.local/share/icons/omarchy-syncd.png"
     global_search = true
+    action = "launch"
+
+    [actions]
+    launch = "~/.local/bin/omarchy-syncd-menu"
 
     [[entries]]
     text = "Omarchy Syncd"
     keywords = ["backup", "restore", "install", "config"]
-    actions = { "open" = "~/.local/bin/omarchy-syncd-menu" }
+    terminal = true
     ```
     Restart Elephant (for example `pkill elephant && elephant &`) so launchers pick up the updated menu.
   - *Hyprland:* Bind `scripts/omarchy-syncd-menu.sh` (or `omarchy-syncd menu`) to your preferred key combination, e.g. Super+Alt+Space.

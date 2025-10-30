@@ -73,6 +73,16 @@ for helper in "${HELPER_BASENAMES[@]}"; do
   chmod +x "$TARGET_DIR/$helper"
 done
 
+ICON_SOURCE="$PROJECT_ROOT/icon.png"
+ICON_DEST="${XDG_DATA_HOME:-$HOME/.local/share}/icons/omarchy-syncd.png"
+if [ -f "$ICON_SOURCE" ]; then
+  mkdir -p "$(dirname "$ICON_DEST")"
+  cp "$ICON_SOURCE" "$ICON_DEST"
+  echo "Copied launcher icon to $ICON_DEST"
+else
+  echo "warning: icon.png not found in project root; skipping icon install."
+fi
+
 echo "Installed $BIN_NAME to $TARGET_DIR"
 echo
 echo "Make sure $TARGET_DIR is on your PATH. You can check with:"
@@ -109,13 +119,17 @@ write_elephant_menu() {
 # Managed by omarchy-syncd
 name = "omarchy-syncd"
 name_pretty = "Omarchy Syncd"
-icon = "applications-system"
+icon = "$ICON_DEST"
 global_search = true
+action = "launch"
+
+[actions]
+launch = "$TARGET_DIR/omarchy-syncd-menu"
 
 [[entries]]
 text = "Omarchy Syncd"
 keywords = ["backup", "restore", "install", "config"]
-actions = { "open" = "$TARGET_DIR/omarchy-syncd-menu" }
+terminal = true
 EOF
 
   if [ -f "$menu_path" ] && ! grep -q "# Managed by omarchy-syncd" "$menu_path"; then

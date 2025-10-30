@@ -330,28 +330,37 @@ fn cmd_install(args: InstallArgs) -> Result<()> {
 
 fn cmd_menu() -> Result<()> {
     let header = "Enter runs selection • Esc cancels";
-    let choices = vec![
-        Choice {
-            id: "install".to_string(),
-            label: "Install – Configure tracked bundles or paths".to_string(),
-        },
-        Choice {
-            id: "backup".to_string(),
-            label: "Backup – Snapshot selected dotfiles to the remote".to_string(),
-        },
-        Choice {
-            id: "restore".to_string(),
-            label: "Restore – Pull tracked dotfiles back into $HOME".to_string(),
-        },
-        Choice {
-            id: "config".to_string(),
-            label: "Config – Edit or inspect omarchy-syncd settings".to_string(),
-        },
-        Choice {
-            id: "uninstall".to_string(),
-            label: "Uninstall – Remove omarchy-syncd and its config".to_string(),
-        },
+    let menu_entries = [
+        ("install", "Install", "Configure tracked bundles or paths"),
+        (
+            "backup",
+            "Backup",
+            "Snapshot selected dotfiles to the remote",
+        ),
+        (
+            "restore",
+            "Restore",
+            "Pull tracked dotfiles back into $HOME",
+        ),
+        ("config", "Config", "Edit or inspect omarchy-syncd settings"),
+        (
+            "uninstall",
+            "Uninstall",
+            "Remove omarchy-syncd and its config",
+        ),
     ];
+    let max_title_len = menu_entries
+        .iter()
+        .map(|(_, title, _)| title.len())
+        .max()
+        .unwrap_or(0);
+    let choices: Vec<Choice> = menu_entries
+        .iter()
+        .map(|(id, title, description)| Choice {
+            id: (*id).to_string(),
+            label: format!("{title:<width$}  {description}", width = max_title_len),
+        })
+        .collect();
 
     let selection =
         selector::single_select("Omarchy Syncd (type to filter) >", header, &choices, &[])?;
@@ -498,6 +507,7 @@ fn cmd_uninstall(args: UninstallArgs) -> Result<()> {
     }
 
     remove_elephant_menu()?;
+    remove_elephant_icon()?;
 
     println!("omarchy-syncd has been uninstalled.");
     Ok(())
@@ -803,6 +813,14 @@ fn elephant_menu_path() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".config/elephant/menus/omarchy-syncd.toml"))
 }
 
+fn elephant_icon_path() -> Result<PathBuf> {
+    if let Some(data_home) = env::var_os("XDG_DATA_HOME") {
+        return Ok(PathBuf::from(data_home).join("icons/omarchy-syncd.png"));
+    }
+    let home = env::var_os("HOME").context("HOME environment variable is not set")?;
+    Ok(PathBuf::from(home).join(".local/share/icons/omarchy-syncd.png"))
+}
+
 fn remove_elephant_menu() -> Result<()> {
     let path = elephant_menu_path()?;
     remove_file_if_exists(&path)?;
@@ -816,5 +834,11 @@ fn remove_elephant_menu() -> Result<()> {
             let _ = fs::remove_dir(parent);
         }
     }
+    Ok(())
+}
+
+fn remove_elephant_icon() -> Result<()> {
+    let path = elephant_icon_path()?;
+    remove_file_if_exists(&path)?;
     Ok(())
 }
