@@ -16,7 +16,7 @@ omarchy-syncd config [--print-path | --create | --write ...]
 **Recommended (remote installer)**
 
 ```bash
-curl -fsSL https://github.com/jtaw5649/omarchy-syncd/raw/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jtaw5649/omarchy-syncd/master/install.sh | bash
 ```
 
 The installer downloads the latest prebuilt release artifact, extracts it to a temporary directory, and runs interactively. If the release download fails (or you export `OMARCHY_SYNCD_USE_SOURCE=1`), it falls back to cloning the repository and building from source. Pass any flags after `--` to forward them to the installer (for example, a custom target directory).
