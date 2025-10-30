@@ -831,22 +831,6 @@ fn elephant_icon_path() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".local/share/icons/omarchy-syncd.png"))
 }
 
-fn elephant_icon_path() -> Result<PathBuf> {
-    if let Some(data_home) = env::var_os("XDG_DATA_HOME") {
-        return Ok(PathBuf::from(data_home).join("icons/omarchy-syncd.png"));
-    }
-    let home = env::var_os("HOME").context("HOME environment variable is not set")?;
-    Ok(PathBuf::from(home).join(".local/share/icons/omarchy-syncd.png"))
-}
-
-fn elephant_icon_path() -> Result<PathBuf> {
-    if let Some(data_home) = env::var_os("XDG_DATA_HOME") {
-        return Ok(PathBuf::from(data_home).join("icons/omarchy-syncd.png"));
-    }
-    let home = env::var_os("HOME").context("HOME environment variable is not set")?;
-    Ok(PathBuf::from(home).join(".local/share/icons/omarchy-syncd.png"))
-}
-
 fn remove_elephant_menu() -> Result<()> {
     let path = elephant_menu_path()?;
     remove_file_if_exists(&path)?;
@@ -860,18 +844,6 @@ fn remove_elephant_menu() -> Result<()> {
             let _ = fs::remove_dir(parent);
         }
     }
-    Ok(())
-}
-
-fn remove_elephant_icon() -> Result<()> {
-    let path = elephant_icon_path()?;
-    remove_file_if_exists(&path)?;
-    Ok(())
-}
-
-fn remove_elephant_icon() -> Result<()> {
-    let path = elephant_icon_path()?;
-    remove_file_if_exists(&path)?;
     Ok(())
 }
 

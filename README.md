@@ -9,6 +9,8 @@ omarchy-syncd restore
 omarchy-syncd config [--print-path | --create | --write ...]
 ```
 
+> **Supported platform:** Arch Linux on x86_64. The installer will exit on other operating systems.
+
 ### Installation
 
 **Recommended (remote installer)**
@@ -17,13 +19,23 @@ omarchy-syncd config [--print-path | --create | --write ...]
 curl -fsSL https://github.com/jtaw5649/omarchy-syncd/raw/main/install.sh | bash
 ```
 
-The script clones the latest release into a temporary directory, runs the interactive installer, and cleans up automatically. Pass any flags after `--` to forward them to the installer (for example, a custom target directory).
+The installer downloads the latest prebuilt release artifact, extracts it to a temporary directory, and runs interactively. If the release download fails (or you export `OMARCHY_SYNCD_USE_SOURCE=1`), it falls back to cloning the repository and building from source. Pass any flags after `--` to forward them to the installer (for example, a custom target directory).
 
 **Local checkout**
 
 - `git clone https://github.com/jtaw5649/omarchy-syncd && cd omarchy-syncd` then run `./install.sh`. The script detects the local clone and skips the bootstrap step.
 - `cargo install --path .` – installs straight into `~/.cargo/bin` (ensure it is on your `PATH`).
 - `cargo build --release` – then copy `target/release/omarchy-syncd` wherever you prefer.
+
+**Manual release download**
+
+```bash
+curl -LO https://github.com/jtaw5649/omarchy-syncd/releases/latest/download/omarchy-syncd-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf omarchy-syncd-x86_64-unknown-linux-gnu.tar.gz
+./install.sh
+```
+
+The installer auto-detects your platform and pulls the matching archive (currently only `x86_64-unknown-linux-gnu`). Override the detection with `OMARCHY_SYNCD_RELEASE_URL=<custom-url>` or change the base path via `OMARCHY_SYNCD_RELEASE_BASE_URL=<mirror>`.
 
 The installer requires Rust’s toolchain (`cargo`), `git`, and a POSIX shell at install time; day-to-day usage only needs `git` and the `omarchy-syncd` binary.
 
