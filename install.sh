@@ -1,6 +1,84 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+detect_target_triple() {
+  if [[ "${OMARCHY_SYNCD_FORCE_PLATFORM:-}" == "arch" ]]; then
+    echo "x86_64-unknown-linux-gnu"
+    return 0
+  fi
+  if [[ -n "${OMARCHY_SYNCD_FORCE_PLATFORM:-}" && "${OMARCHY_SYNCD_FORCE_PLATFORM}" != "arch" ]]; then
+    return 1
+  fi
+  local sys arch
+  sys=$(uname -s 2>/dev/null || echo unknown)
+  arch=$(uname -m 2>/dev/null || echo unknown)
+
+  if [[ "$sys" == Linux* ]] && [[ "$arch" == "x86_64" || "$arch" == "amd64" ]]; then
+    echo "x86_64-unknown-linux-gnu"
+    return 0
+  fi
+
+  return 1
+}
+
+assert_supported_platform() {
+  if [[ "${OMARCHY_SYNCD_SKIP_PLATFORM_CHECK:-0}" == "1" ]]; then
+    return
+  fi
+
+  if [[ -n "${OMARCHY_SYNCD_FORCE_PLATFORM:-}" ]]; then
+    if [[ "${OMARCHY_SYNCD_FORCE_PLATFORM}" == "arch" ]]; then
+      return
+    fi
+    echo "error: omarchy-syncd currently supports only Arch Linux on x86_64." >&2
+    exit 1
+  fi
+
+  if [[ $(uname -s 2>/dev/null) != Linux* ]]; then
+    echo "error: omarchy-syncd currently supports only Arch Linux on x86_64." >&2
+    exit 1
+  fi
+
+  if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    if [[ "${ID:-}" == "arch" ]]; then
+      return
+    fi
+    if [[ "${ID_LIKE:-}" == *"arch"* ]]; then
+      return
+    fi
+  fi
+
+  if command -v pacman >/dev/null 2>&1; then
+    return
+  fi
+
+  echo "error: omarchy-syncd currently supports only Arch Linux on x86_64." >&2
+  exit 1
+}
+
+assert_supported_platform
+
+download_release() {
+  local url="$1"
+  local dest="$2"
+
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fsSL "$url" -o "$dest"; then
+      return 0
+    fi
+  fi
+
+  if command -v wget >/dev/null 2>&1; then
+    if wget -qO "$dest" "$url"; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
 # Bootstrapping: when this script is executed via curl|bash it is not inside
 # a cloned repository. Detect that case, clone the repo, and re-run from there.
 if [[ "${OMARCHY_SYNCD_BOOTSTRAPPED:-0}" != "1" ]]; then
@@ -16,10 +94,19 @@ if [[ "${OMARCHY_SYNCD_BOOTSTRAPPED:-0}" != "1" ]]; then
     REPO_URL=${OMARCHY_SYNCD_REPO_URL:-https://github.com/jtaw5649/omarchy-syncd.git}
     REPO_BRANCH=${OMARCHY_SYNCD_REPO_BRANCH:-main}
     CLONE_DEPTH=${OMARCHY_SYNCD_CLONE_DEPTH:-1}
-
-    if ! command -v git >/dev/null 2>&1; then
-      echo "error: git is required to install omarchy-syncd." >&2
-      exit 1
+    RELEASE_BASE_URL=${OMARCHY_SYNCD_RELEASE_BASE_URL:-https://github.com/jtaw5649/omarchy-syncd/releases/latest/download}
+    RELEASE_TARBALL_URL=${OMARCHY_SYNCD_RELEASE_URL:-}
+    if [[ -z "$RELEASE_TARBALL_URL" ]]; then
+      if target_triple=$(detect_target_triple); then
+        RELEASE_TARBALL_URL="$RELEASE_BASE_URL/omarchy-syncd-${target_triple}.tar.gz"
+      else
+        if [[ "${OMARCHY_SYNCD_SKIP_PLATFORM_CHECK:-0}" == "1" ]]; then
+          echo "warning: skipping platform detection; falling back to source build."
+        else
+          echo "error: omarchy-syncd currently supports only Arch Linux on x86_64." >&2
+          exit 1
+        fi
+      fi
     fi
 
     TMP_DIR=$(mktemp -d)
@@ -27,6 +114,33 @@ if [[ "${OMARCHY_SYNCD_BOOTSTRAPPED:-0}" != "1" ]]; then
       rm -rf "$TMP_DIR"
     }
     trap cleanup EXIT
+
+    if [[ "${OMARCHY_SYNCD_USE_SOURCE:-0}" != "1" && -n "$RELEASE_TARBALL_URL" ]]; then
+      echo "Attempting to download prebuilt release from $RELEASE_TARBALL_URL..."
+      if download_release "$RELEASE_TARBALL_URL" "$TMP_DIR/omarchy-syncd.tar.gz"; then
+        if tar -xzf "$TMP_DIR/omarchy-syncd.tar.gz" -C "$TMP_DIR"; then
+          if [[ -f "$TMP_DIR/install.sh" ]]; then
+            OMARCHY_SYNCD_BOOTSTRAPPED=1 "$TMP_DIR/install.sh" "$@"
+            exit $?
+          else
+            echo "warning: release archive did not contain install.sh; falling back to source build."
+          fi
+        else
+          echo "warning: failed to extract release archive; falling back to source build."
+        fi
+      else
+        if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+          echo "warning: neither curl nor wget is available; falling back to source build."
+        else
+          echo "warning: could not download release archive; falling back to source build."
+        fi
+      fi
+    fi
+
+    if ! command -v git >/dev/null 2>&1; then
+      echo "error: git is required to install omarchy-syncd when no release archive is available." >&2
+      exit 1
+    fi
 
     echo "Fetching omarchy-syncd from $REPO_URL (branch: $REPO_BRANCH)..."
     git clone --depth "$CLONE_DEPTH" --branch "$REPO_BRANCH" "$REPO_URL" "$TMP_DIR" >/dev/null
@@ -42,17 +156,26 @@ PROJECT_ROOT="$(
   pwd -P
 )"
 
-if ! command -v cargo >/dev/null 2>&1; then
-  echo "error: cargo is required to build omarchy-syncd. Install Rust from https://rustup.rs/ first." >&2
-  exit 1
-fi
-
 TARGET_DIR="${1:-$HOME/.local/bin}"
 BIN_NAME="omarchy-syncd"
-BUILD_TARGET="$PROJECT_ROOT/target/release/$BIN_NAME"
+PREBUILT_BIN="$PROJECT_ROOT/$BIN_NAME"
+SOURCE_BUILD_BIN="$PROJECT_ROOT/target/release/$BIN_NAME"
 
-echo "Building $BIN_NAME in release mode..."
-cargo build --release --manifest-path "$PROJECT_ROOT/Cargo.toml"
+if [[ -f "$PREBUILT_BIN" ]]; then
+  echo "Using prebuilt $BIN_NAME from release package..."
+  BUILD_TARGET="$PREBUILT_BIN"
+elif [[ -f "$SOURCE_BUILD_BIN" ]]; then
+  echo "Using existing build artifact at $SOURCE_BUILD_BIN..."
+  BUILD_TARGET="$SOURCE_BUILD_BIN"
+else
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "error: cargo is required to build omarchy-syncd. Install Rust from https://rustup.rs/ first." >&2
+    exit 1
+  fi
+  echo "Building $BIN_NAME in release mode..."
+  cargo build --release --manifest-path "$PROJECT_ROOT/Cargo.toml"
+  BUILD_TARGET="$SOURCE_BUILD_BIN"
+fi
 
 mkdir -p "$TARGET_DIR"
 cp "$BUILD_TARGET" "$TARGET_DIR/"

@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          targets: ${{ env.TARGET }}
+
+      - name: Run tests
+        run: cargo test --locked
+
+      - name: Build omarchy-syncd (${{ env.TARGET }})
+        run: cargo build --release --locked --target "$TARGET"
+
+      - name: Stage release package
+        run: |
+          rm -rf dist
+          mkdir -p dist/package/scripts
+          cp "target/$TARGET/release/omarchy-syncd" dist/package/
+          cp install.sh README.md dist/package/
+          cp icon.png dist/package/ || true
+          cp logo.txt dist/package/ || true
+          cp -a scripts/. dist/package/scripts/
+          chmod +x dist/package/install.sh dist/package/omarchy-syncd dist/package/scripts/*
+
+      - name: Create archive
+        id: package
+        run: |
+          tarball="dist/omarchy-syncd-${TARGET}.tar.gz"
+          tar -czf "$tarball" -C dist/package .
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.package.outputs.tarball }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
