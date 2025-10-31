@@ -17,6 +17,10 @@ if [[ -n "$SCRIPT_DIR" ]]; then
   if [[ -f "$OMARCHY_SYNCD_INSTALL/helpers/presentation.sh" ]]; then
     # Sets gum padding/colours so early confirms match Omarchy style.
     source "$OMARCHY_SYNCD_INSTALL/helpers/presentation.sh"
+    if declare -F exit_presentation_mode >/dev/null 2>&1 && [[ -z "${OMARCHY_SYNCD_PRESENTATION_EXIT_TRAP:-}" ]]; then
+      trap 'exit_presentation_mode' EXIT
+      OMARCHY_SYNCD_PRESENTATION_EXIT_TRAP=1
+    fi
   fi
 fi
 
@@ -34,8 +38,14 @@ ask_yes_no() {
       gum_args+=(--default)
     fi
     if gum confirm "${gum_args[@]}" "$prompt"; then
+      if declare -F clear_logo >/dev/null 2>&1; then
+        clear_logo || true
+      fi
       return 0
     else
+      if declare -F clear_logo >/dev/null 2>&1; then
+        clear_logo || true
+      fi
       return 1
     fi
   fi
@@ -66,11 +76,124 @@ ask_yes_no() {
   done
 }
 
+install_dependency() {
+  local dep="$1"
+
+  log_info "Attempting to install dependency: $dep"
+
+  if ! command -v pacman >/dev/null 2>&1; then
+    log_error "pacman not available; unable to auto-install $dep"
+    echo "error: pacman is required to install '$dep'. Install it manually and rerun the installer." >&2
+    exit 1
+  fi
+
+  local install_cmd=(pacman -S --needed --noconfirm "$dep")
+  if command -v sudo >/dev/null 2>&1; then
+    if sudo "${install_cmd[@]}"; then
+      log_info "Installed $dep via sudo pacman."
+      return 0
+    fi
+  fi
+
+  if "${install_cmd[@]}"; then
+    log_info "Installed $dep via pacman."
+    return 0
+  fi
+
+  log_error "Failed to install dependency $dep automatically."
+  echo "error: failed to install required dependency '$dep'. Please install it manually and rerun omarchy-syncd." >&2
+  exit 1
+}
+
+maybe_bootstrap_dependencies() {
+  if [[ "${OMARCHY_SYNCD_SKIP_DEP_CHECK:-0}" == "1" ]]; then
+    log_info "Skipping dependency bootstrap via OMARCHY_SYNCD_SKIP_DEP_CHECK."
+    return
+  fi
+
+  local -a required=(gum git gh tar curl)
+  local -a missing=()
+  local dep
+
+  for dep in "${required[@]}"; do
+    if ! command -v "$dep" >/dev/null 2>&1; then
+      missing+=("$dep")
+    fi
+  done
+
+  if [[ -n "${OMARCHY_SYNCD_FORCE_MISSING_DEPS:-}" ]]; then
+    local forced_entry
+    IFS=',' read -ra forced <<<"${OMARCHY_SYNCD_FORCE_MISSING_DEPS}"
+    for forced_entry in "${forced[@]}"; do
+      # trim surrounding whitespace
+      forced_entry="${forced_entry#"${forced_entry%%[![:space:]]*}"}"
+      forced_entry="${forced_entry%"${forced_entry##*[![:space:]]}"}"
+      if [[ -n "$forced_entry" && " ${missing[*]} " != *" $forced_entry "* ]]; then
+        missing+=("$forced_entry")
+      fi
+    done
+    unset forced_entry forced
+  fi
+
+  if ((${#missing[@]} == 0)); then
+    log_info "All required dependencies already installed."
+    return
+  fi
+
+  log_info "Missing dependencies detected: ${missing[*]}"
+
+  if command -v gum >/dev/null 2>&1 && [[ "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" != "1" ]]; then
+    gum_panel \
+      "Dependencies required by omarchy-syncd:" \
+      "" \
+      "${missing[@]/#/• }"
+    if ! gum confirm "Install missing dependencies now?"; then
+      echo "Installation cancelled because required dependencies are missing." >&2
+      exit 1
+    fi
+  else
+    echo
+    echo "The following required dependencies are missing: ${missing[*]}"
+    if ! ask_yes_no "Install dependencies now?" true; then
+      echo "Installation cancelled because required dependencies are missing." >&2
+      exit 1
+    fi
+  fi
+
+  for dep in "${missing[@]}"; do
+    install_dependency "$dep"
+  done
+
+  if [[ " ${missing[*]} " == *" gum "* ]]; then
+    source "$OMARCHY_SYNCD_INSTALL/helpers/presentation.sh"
+    log_info "Reloaded presentation helpers after installing gum."
+  fi
+
+  log_info "Dependency bootstrap complete."
+}
+
 # Relaunch via presentation helper for consistent UX
+LAUNCHER_AVAILABLE=0
+if command -v omarchy-syncd-launcher >/dev/null 2>&1; then
+  LAUNCHER_AVAILABLE=1
+fi
+
 if [[ -z "${OMARCHY_SYNCD_LAUNCHED_WITH_PRESENTATION:-}" && "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" != "1" ]]; then
-  if command -v omarchy-syncd-launcher >/dev/null 2>&1; then
+  if (( LAUNCHER_AVAILABLE )); then
     cmd=$(printf '%q ' "$0" "$@")
     exec env OMARCHY_SYNCD_LAUNCHED_WITH_PRESENTATION=1 omarchy-syncd-launcher "$cmd"
+  fi
+fi
+
+if declare -F clear_logo >/dev/null 2>&1; then
+  should_init_presentation=0
+  if [[ -n "${OMARCHY_SYNCD_LAUNCHED_WITH_PRESENTATION:-}" || "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" == "1" ]]; then
+    should_init_presentation=1
+  elif (( LAUNCHER_AVAILABLE == 0 )); then
+    should_init_presentation=1
+  fi
+  if (( should_init_presentation )); then
+    clear_logo || true
   fi
 fi
 
@@ -82,14 +205,11 @@ if [[ -t 0 ]]; then
       "• We'll install omarchy-syncd binaries and helpers." \
       "• Rerun this installer any time to update or repair."
 
-    if ! gum confirm --default=true "Continue with install?"; then
+    if ! ask_yes_no "Continue with install?" true; then
       echo "Installation cancelled."
       exit 0
     fi
 
-    if [[ -z "${OMARCHY_SYNCD_SHOW_INSTALL_LOG+x}" ]]; then
-      export OMARCHY_SYNCD_SHOW_INSTALL_LOG=1
-    fi
   else
     echo
     if ! ask_yes_no "Ready to install omarchy-syncd?" true; then
@@ -262,18 +382,30 @@ export OMARCHY_SYNCD_BIN_DIR="$TARGET_DIR"
 export OMARCHY_SYNCD_STATE_DIR="${OMARCHY_SYNCD_STATE_DIR:-$HOME/.local/share/omarchy-syncd}"
 export OMARCHY_SYNCD_ICON_DIR="${OMARCHY_SYNCD_ICON_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/icons}"
 
+INSTALLED_BIN="$OMARCHY_SYNCD_BIN_DIR/omarchy-syncd"
+CONFIG_PATH="$HOME/.config/omarchy-syncd/config.toml"
+ICON_DEST="$OMARCHY_SYNCD_ICON_DIR/omarchy-syncd.png"
+export ICON_DEST CONFIG_PATH
+
 unset OMARCHY_SYNCD_DONE_MESSAGE OMARCHY_SYNCD_EXAMPLE_NOTE OMARCHY_SYNCD_CONFIG_UPDATED_NOTE OMARCHY_SYNCD_EXAMPLE_CREATED
 
-source "$OMARCHY_SYNCD_INSTALL/helpers/all.sh"
+source "$OMARCHY_SYNCD_INSTALL/helpers/presentation.sh"
+source "$OMARCHY_SYNCD_INSTALL/helpers/logging.sh"
+source "$OMARCHY_SYNCD_INSTALL/helpers/errors.sh"
+log_info "Installer environment: root=$OMARCHY_SYNCD_ROOT bin_dir=$OMARCHY_SYNCD_BIN_DIR state_dir=$OMARCHY_SYNCD_STATE_DIR icon_dir=$OMARCHY_SYNCD_ICON_DIR target_bin=$TARGET_DIR"
+
+maybe_bootstrap_dependencies
 
 PREBUILT_BIN="$OMARCHY_SYNCD_ROOT/omarchy-syncd"
 SOURCE_BUILD_BIN="$OMARCHY_SYNCD_ROOT/target/release/omarchy-syncd"
 
 if [[ -f "$PREBUILT_BIN" ]]; then
   echo "Using prebuilt omarchy-syncd from release package..."
+  log_info "Using packaged binary at $PREBUILT_BIN"
   export OMARCHY_SYNCD_BIN_SOURCE="$PREBUILT_BIN"
 elif [[ -f "$SOURCE_BUILD_BIN" ]]; then
   echo "Using existing build artifact at $SOURCE_BUILD_BIN..."
+  log_info "Using existing build artifact at $SOURCE_BUILD_BIN"
   export OMARCHY_SYNCD_BIN_SOURCE="$SOURCE_BUILD_BIN"
 else
   if ! command -v cargo >/dev/null 2>&1; then
@@ -282,22 +414,31 @@ else
   fi
   echo "Building omarchy-syncd in release mode..."
   cargo build --release --manifest-path "$OMARCHY_SYNCD_ROOT/Cargo.toml"
+  log_info "Built omarchy-syncd via cargo --release"
   export OMARCHY_SYNCD_BIN_SOURCE="$SOURCE_BUILD_BIN"
 fi
 
-source "$OMARCHY_SYNCD_INSTALL/preflight/all.sh"
-source "$OMARCHY_SYNCD_INSTALL/packaging/all.sh"
-source "$OMARCHY_SYNCD_INSTALL/config/all.sh"
-source "$OMARCHY_SYNCD_INSTALL/post-install/all.sh"
+source "$OMARCHY_SYNCD_INSTALL/preflight/guard.sh"
+source "$OMARCHY_SYNCD_INSTALL/preflight/begin.sh"
+run_logged "$OMARCHY_SYNCD_INSTALL/preflight/show-env.sh"
+
+run_logged "$OMARCHY_SYNCD_INSTALL/packaging/paths.sh"
+run_logged "$OMARCHY_SYNCD_INSTALL/packaging/binary.sh"
+run_logged "$OMARCHY_SYNCD_INSTALL/packaging/helpers.sh"
+run_logged "$OMARCHY_SYNCD_INSTALL/packaging/icon.sh"
+run_logged "$OMARCHY_SYNCD_INSTALL/packaging/logo.sh"
+
+run_logged "$OMARCHY_SYNCD_INSTALL/post-install/elephant.sh"
+
+run_logged "$OMARCHY_SYNCD_INSTALL/config/paths.sh"
+
+run_logged "$OMARCHY_SYNCD_INSTALL/post-install/summary.sh"
 
 stop_install_log
 trap - ERR INT TERM
 clear_logo || true
 
 INSTALLED_BIN="$OMARCHY_SYNCD_BIN_DIR/omarchy-syncd"
-CONFIG_PATH="$HOME/.config/omarchy-syncd/config.toml"
-ICON_DEST="$OMARCHY_SYNCD_ICON_DIR/omarchy-syncd.png"
-
 DEFAULT_BUNDLE_IDS=(
   "core_desktop"
   "terminals"
@@ -330,7 +471,18 @@ prompt_string() {
   fi
 
   if [[ "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" != "1" ]] && command -v gum >/dev/null 2>&1; then
-    gum input --prompt "$prompt " --value "$default"
+    local __gum_input
+    if ! __gum_input=$(gum input --prompt "$prompt " --value "$default"); then
+      return 1
+    fi
+    if declare -F clear_logo >/dev/null 2>&1; then
+      clear_logo || true
+    fi
+    if [[ -z "$__gum_input" ]]; then
+      echo "$default"
+    else
+      echo "$__gum_input"
+    fi
   else
     local value
     read -r -p "$prompt " value || return 1
@@ -342,44 +494,6 @@ prompt_string() {
   fi
 }
 
-write_elephant_menu() {
-  local menu_dir="$HOME/.config/elephant/menus"
-  local menu_path="$menu_dir/omarchy-syncd.toml"
-  mkdir -p "$menu_dir"
-
-  local tmp
-  tmp=$(mktemp)
-  cat >"$tmp" <<EOF_MENU
-# Managed by omarchy-syncd
-name = "omarchy-syncd"
-name_pretty = "Omarchy Syncd"
-icon = "$ICON_DEST"
-global_search = true
-action = "launch"
-
-[actions]
-launch = "$OMARCHY_SYNCD_BIN_DIR/omarchy-syncd-menu"
-
-[[entries]]
-text = "Omarchy Syncd"
-keywords = ["backup", "restore", "install", "config"]
-terminal = true
-EOF_MENU
-
-  if [[ -f "$menu_path" && ! $(grep -q "# Managed by omarchy-syncd" "$menu_path") ]]; then
-    echo "Existing Elephant menu at $menu_path is unmanaged; leaving untouched."
-    rm -f "$tmp"
-    return
-  fi
-
-  if ! cmp -s "$tmp" "$menu_path" >/dev/null 2>&1; then
-    mv "$tmp" "$menu_path"
-    echo "Elephant menu updated at $menu_path"
-  else
-    rm -f "$tmp"
-  fi
-}
-
 append_example_comment() {
   if [[ -f "$CONFIG_PATH" ]] && ! grep -q '^# Example: add additional paths later$' "$CONFIG_PATH"; then
     cat <<'EOF' >>"$CONFIG_PATH"
@@ -388,6 +502,7 @@ append_example_comment() {
 # paths = ["~/.config/example", "~/.local/share/example"]
 # bundles = ["creative"]
 EOF
+    log_info "Appended example guidance to $CONFIG_PATH"
   fi
 }
 
@@ -410,6 +525,7 @@ bundles = []
 # paths = ["~/.config/example", "~/.local/share/example"]
 # bundles = ["creative"]
 EOF
+  log_info "Wrote example config to $CONFIG_PATH (repo=$repo_url branch=$branch_name)"
 }
 
 collect_config() {
@@ -422,50 +538,48 @@ collect_config() {
   local config_updated_note=""
 
   if [[ ! -t 0 ]]; then
+    log_info "Non-interactive shell detected; skipping configuration wizard."
     echo "Non-interactive shell detected; skipping configuration. Run \"omarchy-syncd config --write --repo-url <remote> ...\" later."
     return
   fi
 
   if [[ -f "$config_path" ]]; then
     config_preexisted=1
+    log_info "Existing config detected at $config_path"
     if [[ "${OMARCHY_SYNCD_FORCE_RECONFIGURE:-0}" != "1" ]]; then
       if [[ "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" != "1" ]] && command -v gum >/dev/null 2>&1; then
         clear_logo || true
         gum_panel \
           "Existing omarchy-syncd config found at:" \
           "$config_path"
-        if ! gum confirm --default=false "Update existing config now?"; then
-          echo "Keeping current configuration. Run \"omarchy-syncd config --write ...\" later if you change your mind."
-          return
-        fi
       else
         echo "Existing omarchy-syncd config found at $config_path."
-        if ! ask_yes_no "Update existing config now?" false; then
-          echo "Keeping current configuration. Run \"omarchy-syncd config --write ...\" later if you change your mind."
-          return
-        fi
+      fi
+
+      if ! ask_yes_no "Update existing config now?" false; then
+        echo "Keeping current configuration. Run \"omarchy-syncd config --write ...\" later if you change your mind."
+        log_info "User opted to keep existing configuration."
+        return
       fi
     fi
 
     backup_path="${config_path}.bak.$(date +%Y%m%d%H%M%S)"
     if cp "$config_path" "$backup_path"; then
       backup_note="Previous config backed up to $backup_path."
+      log_info "Backed up existing config to $backup_path"
     else
       backup_note="Previous config could not be backed up automatically."
+      log_warn "Failed to back up existing config from $config_path"
     fi
   fi
 
   if ! git config --global --get user.name >/dev/null 2>&1 || ! git config --global user.email >/dev/null 2>&1; then
     echo "Git is not fully configured (missing user.name / user.email)."
     echo "You can continue, but commands that rely on Git identity may prompt later."
-    if [[ "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" != "1" ]] && command -v gum >/dev/null 2>&1; then
-      if ! gum confirm --default=true "Continue configuring omarchy-syncd anyway?"; then
-        return
-      fi
-    else
-      if ! ask_yes_no "Continue configuring omarchy-syncd anyway?" true; then
-        return
-      fi
+    log_warn "Git identity incomplete (user.name or user.email missing). Prompting user."
+    if ! ask_yes_no "Continue configuring omarchy-syncd anyway?" true; then
+      log_info "User cancelled configuration due to incomplete git identity."
+      return
     fi
   fi
 
@@ -476,20 +590,18 @@ collect_config() {
       "" \
       "• Adds your repo so menus work." \
       "• Needs git + gh (or configure details manually)."
-
-    if ! gum confirm --default=true "Create config now?"; then
-      return
-    fi
   else
     printf '%s\n' \
       "Ready to write your omarchy-syncd config?" \
       "" \
       "• Adds your repo so menus work." \
       "• Needs git + gh (or configure details manually)."
-    if ! ask_yes_no "Create config now?"; then
-      echo "You can rerun \"omarchy-syncd config --write ...\" later if you prefer."
-      return
-    fi
+  fi
+
+  if ! ask_yes_no "Create config now?" true; then
+    echo "You can rerun \"omarchy-syncd config --write ...\" later if you prefer."
+    log_info "User declined to create configuration."
+    return
   fi
 
   local repo_url=""
@@ -547,6 +659,7 @@ collect_config() {
 
   local branch_name
   branch_name=$(prompt_string "Branch name to track [master]:" "master")
+  log_info "Configuration will track branch $branch_name"
 
   local include_defaults=false
   local manual_mode=false
@@ -569,6 +682,9 @@ collect_config() {
       "Include all default bundles" \
       "Manual bundle selection" \
       "Skip default bundles") || bundle_action="Skip default bundles"
+    if declare -F clear_logo >/dev/null 2>&1; then
+      clear_logo || true
+    fi
 
     case "$bundle_action" in
       "Include all default bundles")
@@ -578,6 +694,9 @@ collect_config() {
         manual_mode=true
         local selection
         selection=$(gum choose --no-limit --cursor "➤" --height 12 --header "Bundles are optional; deselect to skip tracking" "${DEFAULT_BUNDLE_LABELS[@]}") || selection=""
+        if declare -F clear_logo >/dev/null 2>&1; then
+          clear_logo || true
+        fi
         if [[ -n "$selection" ]]; then
           manual_bundle_ids=()
           while IFS= read -r line; do
@@ -638,6 +757,16 @@ collect_config() {
   if [[ "$include_defaults" == true || "$manual_mode" == true ]]; then
     extra_paths=$(prompt_string "Additional paths (comma-separated, optional):" "")
   fi
+  if [[ "$include_defaults" == true ]]; then
+    log_info "User opted to include all default bundles."
+  elif (( ${#manual_bundle_ids[@]} > 0 )); then
+    log_info "User selected manual bundles: ${manual_bundle_ids[*]}"
+  else
+    log_info "No default bundles selected."
+  fi
+  if [[ -n "$extra_paths" ]]; then
+    log_info "Additional paths requested: $extra_paths"
+  fi
 
   local args=("$INSTALLED_BIN" "config" "--write" "--repo-url" "$repo_url" "--branch" "$branch_name")
   if [[ "$include_defaults" == true ]]; then
@@ -662,9 +791,12 @@ collect_config() {
     if (( config_preexisted == 1 )); then
       args+=("--force")
     fi
+    log_info "Invoking omarchy-syncd config writer with args: ${args[*]}"
     if "${args[@]}"; then
       append_example_comment
+      log_info "Config writer completed successfully."
     else
+      log_error "Config writer failed with status $?"
       return
     fi
   else
@@ -678,6 +810,9 @@ collect_config() {
     if [[ -n "$backup_note" ]]; then
       config_updated_note+=" $backup_note"
     fi
+    log_info "Configuration updated at $config_path"
+  else
+    log_info "Initial configuration created at $config_path"
   fi
 
   export OMARCHY_SYNCD_EXAMPLE_CREATED="$example_created"
@@ -714,4 +849,5 @@ fi
 done_summary_path="$OMARCHY_SYNCD_STATE_DIR/done-message.txt"
 mkdir -p "$(dirname "$done_summary_path")"
 printf '%s\n' "$summary_text" >"$done_summary_path"
+log_info "Wrote installation summary to $done_summary_path"
 export OMARCHY_SYNCD_DONE_MESSAGE

@@ -2,4 +2,4 @@
 
 set -euo pipefail
 
-echo "omarchy-syncd install pipeline completed."
+log_info "omarchy-syncd install pipeline completed."

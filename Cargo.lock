@@ -879,6 +879,7 @@ version = "2.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "chrono",
  "clap",
  "fs_extra",
  "nix 0.27.1",

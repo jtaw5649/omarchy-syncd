@@ -3,4 +3,4 @@
 set -euo pipefail
 
 mkdir -p "$HOME/.config/omarchy-syncd"
-echo "Ensured config directory at $HOME/.config/omarchy-syncd"
+log_info "Ensured config directory at $HOME/.config/omarchy-syncd"

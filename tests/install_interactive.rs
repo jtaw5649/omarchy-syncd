@@ -2,13 +2,13 @@ use anyhow::{Context, Result, anyhow};
 use assert_cmd::cargo::cargo_bin;
 use nix::poll::{PollFd, PollFlags, poll};
 use ptyprocess::{PtyProcess, WaitStatus, stream::Stream};
-use std::fs;
 use std::io::{self, ErrorKind, Read, Write};
 use std::os::fd::BorrowedFd;
 use std::os::unix::{fs::PermissionsExt, io::AsRawFd};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
+use std::{env, fs};
 use tempfile::{TempDir, tempdir};
 
 fn copy_dir_all(src: &Path, dst: &Path) -> io::Result<()> {
@@ -48,9 +48,20 @@ fn install_interactive_skip_defaults_generates_example_config() -> Result<()> {
         "config should include example comment, got:\n{config_body}"
     );
 
+    let log_path = run.state_dir().join("install.log");
     assert!(
-        run.state_dir().join("install.log").exists(),
-        "install log should exist in state dir"
+        log_path.exists(),
+        "install log should be written to the state dir at {}",
+        log_path.display()
+    );
+    let log_contents = run.log_contents()?;
+    assert!(
+        log_contents.contains("Wrote example config to"),
+        "install log should record example config creation:\n{log_contents}"
+    );
+    assert!(
+        log_contents.contains("Initial configuration created"),
+        "install log should note initial configuration:\n{log_contents}"
     );
 
     Ok(())
@@ -75,6 +86,16 @@ fn install_interactive_include_defaults_tracks_default_bundles() -> Result<()> {
             "expected default bundle '{bundle}' present in config:\n{config_body}"
         );
     }
+
+    let log_contents = run.log_contents()?;
+    assert!(
+        log_contents.contains("User opted to include all default bundles."),
+        "install log should record default bundle selection:\n{log_contents}"
+    );
+    assert!(
+        log_contents.contains("Invoking omarchy-syncd config writer"),
+        "install log should show config writer invocation:\n{log_contents}"
+    );
 
     Ok(())
 }
@@ -101,6 +122,16 @@ fn install_interactive_manual_selection_tracks_custom_choices() -> Result<()> {
     assert!(
         config_body.contains("~/.config/manual"),
         "manual selection should carry custom path, got:\n{config_body}"
+    );
+
+    let log_contents = run.log_contents()?;
+    assert!(
+        log_contents.contains("User selected manual bundles: core_desktop cli_tools"),
+        "install log should capture manual bundle selection:\n{log_contents}"
+    );
+    assert!(
+        log_contents.contains("Invoking omarchy-syncd config writer"),
+        "install log should show config writer invocation:\n{log_contents}"
     );
 
     Ok(())
@@ -143,6 +174,162 @@ fn install_interactive_update_existing_creates_backup_note() -> Result<()> {
     assert!(
         backup_exists,
         "expected backup config file alongside updated config"
+    );
+
+    let log_contents = rerun.log_contents()?;
+    assert!(
+        log_contents.contains("Existing config detected"),
+        "install log should note existing config:\n{log_contents}"
+    );
+    assert!(
+        log_contents.contains("Backed up existing config"),
+        "install log should record config backup:\n{log_contents}"
+    );
+    assert!(
+        log_contents.contains("Configuration updated"),
+        "install log should report config update:\n{log_contents}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn install_bootstraps_missing_dependencies() -> Result<()> {
+    let fixture = ReleaseFixture::prepare()?;
+    let stub_bin = fixture.path().join("bin");
+    let pacman_log = stub_bin.join("pacman.log");
+    if pacman_log.exists() {
+        fs::remove_file(&pacman_log)?;
+    }
+
+    for name in ["pacman", "sudo", "gum", "git", "gh", "tar", "curl"] {
+        let path = stub_bin.join(name);
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+    }
+
+    let pacman_script = r#"#!/usr/bin/env bash
+set -euo pipefail
+log="${PACMAN_LOG:?}"
+dep="${@: -1}"
+echo "$dep" >>"$log"
+stub_dir="$(dirname "$0")"
+
+case "$dep" in
+  git)
+    if [[ -n "${GIT_REAL_PATH:-}" ]]; then
+      cat >"$stub_dir/git" <<EOF
+#!/usr/bin/env bash
+exec "${GIT_REAL_PATH}" "\$@"
+EOF
+    else
+      cat >"$stub_dir/git" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+    fi
+    ;;
+  gh)
+    if [[ -n "${GH_REAL_PATH:-}" ]]; then
+      cat >"$stub_dir/gh" <<EOF
+#!/usr/bin/env bash
+exec "${GH_REAL_PATH}" "\$@"
+EOF
+    else
+      cat >"$stub_dir/gh" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "auth" && "$2" == "status" ]]; then
+  exit 1
+fi
+exit 0
+EOF
+    fi
+    ;;
+  gum)
+    cat >"$stub_dir/gum" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+    ;;
+  tar)
+    if [[ -n "${TAR_REAL_PATH:-}" ]]; then
+      cat >"$stub_dir/tar" <<EOF
+#!/usr/bin/env bash
+exec "${TAR_REAL_PATH}" "\$@"
+EOF
+    else
+      cat >"$stub_dir/tar" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+    fi
+    ;;
+  curl)
+    if [[ -n "${CURL_REAL_PATH:-}" ]]; then
+      cat >"$stub_dir/curl" <<EOF
+#!/usr/bin/env bash
+exec "${CURL_REAL_PATH}" "\$@"
+EOF
+    else
+      cat >"$stub_dir/curl" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+    fi
+    ;;
+esac
+
+chmod +x "$stub_dir/$dep"
+exit 0
+"#;
+    fs::write(stub_bin.join("pacman"), pacman_script)?;
+    fs::set_permissions(stub_bin.join("pacman"), fs::Permissions::from_mode(0o755))?;
+
+    let sudo_script = r#"#!/usr/bin/env bash
+set -euo pipefail
+"$@"
+"#;
+    fs::write(stub_bin.join("sudo"), sudo_script)?;
+    fs::set_permissions(stub_bin.join("sudo"), fs::Permissions::from_mode(0o755))?;
+
+    let orig_path = env::var("PATH")?;
+    let git_real = find_in_path("git", &orig_path)
+        .map(|p| p.into_os_string().into_string().unwrap())
+        .unwrap_or_default();
+    let gh_real = find_in_path("gh", &orig_path)
+        .map(|p| p.into_os_string().into_string().unwrap())
+        .unwrap_or_default();
+    let tar_real = find_in_path("tar", &orig_path)
+        .map(|p| p.into_os_string().into_string().unwrap())
+        .unwrap_or_default();
+    let curl_real = find_in_path("curl", &orig_path)
+        .map(|p| p.into_os_string().into_string().unwrap())
+        .unwrap_or_default();
+
+    let run = run_install_with(&fixture, DEP_BOOTSTRAP_ACTIONS, None, true, |cmd| {
+        cmd.env("OMARCHY_SYNCD_SKIP_DEP_CHECK", "0")
+            .env("OMARCHY_SYNCD_FORCE_MISSING_DEPS", "gum,git,gh,tar,curl")
+            .env("PACMAN_LOG", pacman_log.as_os_str())
+            .env("GIT_REAL_PATH", &git_real)
+            .env("GH_REAL_PATH", &gh_real)
+            .env("TAR_REAL_PATH", &tar_real)
+            .env("CURL_REAL_PATH", &curl_real)
+            .env("PATH", format!("{}:{}", stub_bin.display(), orig_path));
+    })?;
+
+    let pacman_entries = fs::read_to_string(&pacman_log)?;
+    for dep in ["gum", "git", "gh", "tar", "curl"] {
+        assert!(
+            pacman_entries.lines().any(|line| line.trim() == dep),
+            "expected pacman to install {dep}, log was:\n{pacman_entries}"
+        );
+    }
+
+    let log_contents = run.log_contents()?;
+    assert!(
+        log_contents.contains("Dependency bootstrap complete."),
+        "install log should record dependency bootstrap completion"
     );
 
     Ok(())
@@ -247,9 +434,22 @@ impl PromptAction {
     }
 }
 
+fn find_in_path(binary: &str, search_path: &str) -> Option<PathBuf> {
+    env::split_paths(search_path)
+        .filter_map(|dir| {
+            let candidate = dir.join(binary);
+            if candidate.is_file() {
+                Some(candidate)
+            } else {
+                None
+            }
+        })
+        .next()
+}
+
 const SKIP_DEFAULTS_ACTIONS: &[PromptAction] = &[
     PromptAction::reply("Ready to install omarchy-syncd? [Y/n]", "y"),
-    PromptAction::reply("Create config now? [y/N]", "y"),
+    PromptAction::reply("Create config now? [Y/n]", "y"),
     PromptAction::optional_reply("Create a new private GitHub repository via gh? [y/N]", "n"),
     PromptAction::reply("Use HTTPS or SSH for GitHub access? [https/ssh]:", "https"),
     PromptAction::reply(
@@ -262,7 +462,7 @@ const SKIP_DEFAULTS_ACTIONS: &[PromptAction] = &[
 
 const INCLUDE_DEFAULTS_ACTIONS: &[PromptAction] = &[
     PromptAction::reply("Ready to install omarchy-syncd? [Y/n]", "y"),
-    PromptAction::reply("Create config now? [y/N]", "y"),
+    PromptAction::reply("Create config now? [Y/n]", "y"),
     PromptAction::optional_reply("Create a new private GitHub repository via gh? [y/N]", "n"),
     PromptAction::reply("Use HTTPS or SSH for GitHub access? [https/ssh]:", "https"),
     PromptAction::reply(
@@ -274,9 +474,23 @@ const INCLUDE_DEFAULTS_ACTIONS: &[PromptAction] = &[
     PromptAction::reply("Additional paths (comma-separated, optional):", ""),
 ];
 
+const DEP_BOOTSTRAP_ACTIONS: &[PromptAction] = &[
+    PromptAction::reply("Ready to install omarchy-syncd? [Y/n]", "y"),
+    PromptAction::reply("Install dependencies now? [Y/n]", "y"),
+    PromptAction::reply("Create config now? [Y/n]", "y"),
+    PromptAction::optional_reply("Create a new private GitHub repository via gh? [y/N]", "n"),
+    PromptAction::reply("Use HTTPS or SSH for GitHub access? [https/ssh]:", "https"),
+    PromptAction::reply(
+        "Enter the GitHub repo (owner/name) for HTTPS:",
+        "tester/deps-check",
+    ),
+    PromptAction::reply("Branch name to track [master]:", ""),
+    PromptAction::reply("Include defaults? [Y/n/m]:", "n"),
+];
+
 const MANUAL_SELECTION_ACTIONS: &[PromptAction] = &[
     PromptAction::reply("Ready to install omarchy-syncd? [Y/n]", "y"),
-    PromptAction::reply("Create config now? [y/N]", "y"),
+    PromptAction::reply("Create config now? [Y/n]", "y"),
     PromptAction::optional_reply("Create a new private GitHub repository via gh? [y/N]", "n"),
     PromptAction::reply("Use HTTPS or SSH for GitHub access? [https/ssh]:", "https"),
     PromptAction::reply(
@@ -296,7 +510,7 @@ const UPDATE_EXISTING_ACTIONS: &[PromptAction] = &[
     PromptAction::reply("Ready to install omarchy-syncd? [Y/n]", "y"),
     PromptAction::optional_ack("Existing omarchy-syncd config found at"),
     PromptAction::reply("Update existing config now? [y/N]", "y"),
-    PromptAction::reply("Create config now? [y/N]", "y"),
+    PromptAction::reply("Create config now? [Y/n]", "y"),
     PromptAction::optional_reply("Create a new private GitHub repository via gh? [y/N]", "n"),
     PromptAction::reply("Use HTTPS or SSH for GitHub access? [https/ssh]:", "https"),
     PromptAction::reply(
@@ -313,6 +527,18 @@ fn run_install(
     home_override: Option<&Path>,
     configure_git: bool,
 ) -> Result<InstallRun> {
+    run_install_with(fixture, actions, home_override, configure_git, |cmd| {
+        cmd.env("OMARCHY_SYNCD_SKIP_DEP_CHECK", "1");
+    })
+}
+
+fn run_install_with(
+    fixture: &ReleaseFixture,
+    actions: &[PromptAction],
+    home_override: Option<&Path>,
+    configure_git: bool,
+    command_setup: impl FnOnce(&mut Command),
+) -> Result<InstallRun> {
     let home_handle = if let Some(path) = home_override {
         HomeHandle::Borrowed(path.to_path_buf())
     } else {
@@ -325,6 +551,9 @@ fn run_install(
 
     let xdg_config = home_handle.path().join(".config");
     let xdg_data = home_handle.path().join(".local/share");
+    let log_path = home_handle
+        .path()
+        .join(".local/share/omarchy-syncd/install.log");
     let mut cmd = Command::new("./install.sh");
     cmd.current_dir(fixture.path())
         .env("HOME", home_handle.path())
@@ -343,6 +572,8 @@ fn run_install(
                 std::env::var("PATH").unwrap_or_default()
             ),
         );
+
+    command_setup(&mut cmd);
 
     let process = PtyProcess::spawn(cmd)?;
     let stream = process
@@ -369,9 +600,6 @@ fn run_install(
     drop(driver);
     let wait_status = process.wait()?;
     if !matches!(wait_status, WaitStatus::Exited(_, 0)) {
-        let log_path = home_handle
-            .path()
-            .join(".local/share/omarchy-syncd/install.log");
         let log_snippet = read_log_tail(&log_path);
         return Err(anyhow!(
             "installer exited abnormally: {wait_status:?}\n--- install.log ---\n{log_snippet}"
@@ -387,6 +615,7 @@ fn run_install(
     Ok(InstallRun {
         home: home_handle,
         summary,
+        log_path,
     })
 }
 
@@ -416,6 +645,7 @@ impl HomeHandle {
 struct InstallRun {
     home: HomeHandle,
     summary: String,
+    log_path: PathBuf,
 }
 
 impl InstallRun {
@@ -437,6 +667,12 @@ impl InstallRun {
 
     fn summary(&self) -> &str {
         self.summary.trim_end()
+    }
+
+    fn log_contents(&self) -> Result<String> {
+        let contents = fs::read_to_string(&self.log_path)
+            .with_context(|| format!("reading install log at {:?}", self.log_path))?;
+        Ok(contents)
     }
 }
 

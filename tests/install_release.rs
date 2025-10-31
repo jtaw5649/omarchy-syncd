@@ -1,3 +1,4 @@
+use anyhow::Context;
 use assert_cmd::Command;
 use std::fs;
 use std::io;
@@ -59,6 +60,7 @@ fn install_prefers_prebuilt_binary_when_available() -> Result<(), Box<dyn std::e
         .env("OMARCHY_SYNCD_BOOTSTRAPPED", "1")
         .env("OMARCHY_SYNCD_FORCE_PLATFORM", "arch")
         .env("OMARCHY_SYNCD_FORCE_NO_GUM", "1")
+        .env("OMARCHY_SYNCD_SKIP_DEP_CHECK", "1")
         .env("OMARCHY_SYNCD_SKIP_PLATFORM_CHECK", "1")
         .env("HOME", home_dir.path())
         .env("XDG_DATA_HOME", &xdg_data_home)
@@ -80,9 +82,21 @@ fn install_prefers_prebuilt_binary_when_available() -> Result<(), Box<dyn std::e
     );
 
     let state_dir = home_dir.path().join(".local/share/omarchy-syncd");
+    let log_path = state_dir.join("install.log");
     assert!(
-        state_dir.join("install.log").exists(),
-        "install log should be created"
+        log_path.exists(),
+        "install log should be written to the state dir at {}",
+        log_path.display()
+    );
+    let log_contents = fs::read_to_string(&log_path)
+        .with_context(|| format!("reading install log at {:?}", log_path))?;
+    assert!(
+        log_contents.contains("Ensured install directories"),
+        "install log should note directory creation:\n{log_contents}"
+    );
+    assert!(
+        log_contents.contains("Installed omarchy-syncd binary"),
+        "install log should include binary installation:\n{log_contents}"
     );
     assert!(
         state_dir.join("logo.txt").exists(),
@@ -94,6 +108,56 @@ fn install_prefers_prebuilt_binary_when_available() -> Result<(), Box<dyn std::e
 
     let update_helper = target_dir.join("omarchy-syncd-update");
     assert!(update_helper.exists(), "update helper should be deployed");
+
+    let helper_bases = [
+        "omarchy-syncd-menu",
+        "omarchy-syncd-install",
+        "omarchy-syncd-backup",
+        "omarchy-syncd-restore",
+        "omarchy-syncd-config",
+        "omarchy-syncd-uninstall",
+    ];
+    for helper in helper_bases {
+        let helper_path = target_dir.join(helper);
+        assert!(
+            helper_path.exists(),
+            "{helper} helper should be present after install",
+            helper = helper
+        );
+        let shim_path = target_dir.join(format!("{helper}.sh"));
+        assert!(
+            shim_path.exists(),
+            "{helper}.sh shim should be present after install",
+            helper = helper
+        );
+        let helper_content = fs::read(&helper_path)?;
+        let shim_content = fs::read(&shim_path)?;
+        assert_eq!(
+            helper_content,
+            shim_content,
+            "{helper} helper and shim should share the same wrapper implementation",
+            helper = helper
+        );
+    }
+
+    let elephant_menu = home_dir
+        .path()
+        .join(".config/elephant/menus/omarchy-syncd.toml");
+    assert!(
+        elephant_menu.exists(),
+        "Elephant menu should be generated at {}",
+        elephant_menu.display()
+    );
+    assert!(
+        log_contents.contains("Elephant menu"),
+        "install log should mention Elephant menu setup:\n{log_contents}"
+    );
+    assert!(
+        log_contents.contains("Elephant not running; no reload necessary")
+            || log_contents.contains("Restarted Elephant to reload menu entries")
+            || log_contents.contains("Failed to stop running Elephant process"),
+        "install log should record Elephant reload handling:\n{log_contents}"
+    );
 
     Ok(())
 }

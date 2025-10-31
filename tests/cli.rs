@@ -121,6 +121,20 @@ fn find_config_file(home: &Path) -> Result<PathBuf> {
     );
 }
 
+fn clone_remote_repo(base: &Path, remote: &Path, checkout: &Path) -> Result<()> {
+    run_git(
+        Some(base),
+        &[
+            "clone",
+            "--branch",
+            "master",
+            "--single-branch",
+            path_str(remote)?,
+            path_str(checkout)?,
+        ],
+    )
+}
+
 #[test]
 fn init_with_defaults_and_extra_path_writes_config() -> Result<()> {
     let temp = tempdir()?;
@@ -234,10 +248,7 @@ fn backup_and_restore_roundtrip() -> Result<()> {
     base_command(&home).arg("backup").assert().success();
 
     let checkout = temp.path().join("checkout");
-    run_git(
-        Some(temp.path()),
-        &["clone", path_str(&remote)?, path_str(&checkout)?],
-    )?;
+    clone_remote_repo(temp.path(), &remote, &checkout)?;
 
     #[derive(Deserialize)]
     struct RecordedSymlink {
@@ -467,10 +478,7 @@ fn backup_respects_path_flag() -> Result<()> {
         .success();
 
     let checkout = temp.path().join("checkout-selective");
-    run_git(
-        Some(temp.path()),
-        &["clone", path_str(&remote)?, path_str(&checkout)?],
-    )?;
+    clone_remote_repo(temp.path(), &remote, &checkout)?;
 
     assert!(checkout.join(".config/hypr/hyprland.conf").exists());
     assert!(
@@ -597,10 +605,7 @@ fn backup_initializes_empty_remote() -> Result<()> {
     base_command(&home).arg("backup").assert().success();
 
     let checkout = temp.path().join("checkout-empty");
-    run_git(
-        Some(temp.path()),
-        &["clone", path_str(&remote)?, path_str(&checkout)?],
-    )?;
+    clone_remote_repo(temp.path(), &remote, &checkout)?;
 
     let cloned_hypr = checkout.join(".config/hypr/hyprland.conf");
     assert!(

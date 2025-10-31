@@ -30,20 +30,6 @@ restore_outputs() {
   exec 1>&3 2>&4
 }
 
-show_log_tail() {
-  [[ -f "$OMARCHY_SYNCD_INSTALL_LOG_FILE" ]] || return
-  if [[ "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" != "1" ]] && command -v gum >/dev/null 2>&1; then
-    local log_lines=$(( TERM_HEIGHT > LOGO_HEIGHT + 35 ? TERM_HEIGHT - LOGO_HEIGHT - 35 : 20 ))
-    local max_width=$(( LOGO_WIDTH > 4 ? LOGO_WIDTH - 4 : 76 ))
-    tail -n "$log_lines" "$OMARCHY_SYNCD_INSTALL_LOG_FILE" | while IFS= read -r line; do
-      [[ ${#line} -gt $max_width ]] && line="${line:0:max_width}..."
-      gum style "$line"
-    done
-  else
-    tail -n 50 "$OMARCHY_SYNCD_INSTALL_LOG_FILE"
-  fi
-}
-
 show_failed_command() {
   local cmd="${BASH_COMMAND:-unknown}"
   local max_width=$(( LOGO_WIDTH > 4 ? LOGO_WIDTH - 4 : 76 ))
@@ -57,15 +43,14 @@ show_failed_command() {
 
 catch_errors() {
   local exit_code=$?
-  stop_log_output || true
   restore_outputs
   clear_logo || true
   show_cursor
 
   if [[ "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" != "1" ]] && command -v gum >/dev/null 2>&1; then
     gum style --foreground 1 --padding "1 0 1 ${PADDING_LEFT:-0}" "omarchy-syncd installation stopped!"
-    show_log_tail
     show_failed_command
+    gum style "See $OMARCHY_SYNCD_INSTALL_LOG_FILE for full details."
     gum style "$OMARCHY_SYNCD_QR"
     gum style "Need help? Join the community at https://omarchy.org/discord"
     if gum confirm "Retry installation now?"; then
@@ -73,8 +58,8 @@ catch_errors() {
     fi
   else
     echo "omarchy-syncd installation halted (exit code $exit_code)"
-    show_log_tail
     show_failed_command
+    echo "See $OMARCHY_SYNCD_INSTALL_LOG_FILE for full details."
   fi
 
   exit "$exit_code"

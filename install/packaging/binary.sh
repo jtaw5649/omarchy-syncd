@@ -8,3 +8,4 @@ if [[ ! -f "$OMARCHY_SYNCD_BIN_SOURCE" ]]; then
 fi
 
 install -m 755 "$OMARCHY_SYNCD_BIN_SOURCE" "$OMARCHY_SYNCD_BIN_DIR/omarchy-syncd"
+log_info "Installed omarchy-syncd binary from $OMARCHY_SYNCD_BIN_SOURCE to $OMARCHY_SYNCD_BIN_DIR/omarchy-syncd"

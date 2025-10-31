@@ -9,15 +9,36 @@ ensure_gum() {
     return 1
   fi
 
-  if command -v gum >/dev/null 2>&1; then
-    return 0
-  fi
-
-  if command -v sudo >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1; then
-    sudo pacman -S --needed --noconfirm gum >/dev/null 2>&1 || true
-  fi
-
   command -v gum >/dev/null 2>&1
+}
+
+enter_presentation_mode() {
+  if [[ "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" == "1" ]]; then
+    return
+  fi
+
+  if [[ ! -t 1 ]]; then
+    return
+  fi
+
+  if [[ -n "${OMARCHY_SYNCD_IN_ALT_SCREEN:-}" ]]; then
+    return
+  fi
+
+  printf '\033[?1049h'
+  OMARCHY_SYNCD_IN_ALT_SCREEN=1
+}
+
+exit_presentation_mode() {
+  if [[ -z "${OMARCHY_SYNCD_IN_ALT_SCREEN:-}" ]]; then
+    return
+  fi
+
+  if [[ -t 1 ]]; then
+    printf '\033[?1049l\033[?25h'
+  fi
+
+  unset OMARCHY_SYNCD_IN_ALT_SCREEN
 }
 
 if ensure_gum; then
@@ -74,7 +95,17 @@ clear_logo() {
     return
   fi
 
-  printf '\033[H\033[2J\033[32m'
+  # Only redraw when stdout is an interactive terminal; piping would just leak
+  # control sequences into logs.
+  if [[ ! -t 1 ]]; then
+    return
+  fi
+
+  enter_presentation_mode
+
+  # Clear scrollback (ESC[3J) so previous steps do not linger, then wipe the
+  # visible screen before redrawing the logo.
+  printf '\033[3J\033[H\033[2J\033[32m'
   if [[ -f "$OMARCHY_SYNCD_LOGO_PATH" ]]; then
     cat "$OMARCHY_SYNCD_LOGO_PATH"
   fi
@@ -89,14 +120,4 @@ gum_panel() {
   fi
 
   gum style --border normal --border-foreground 6 --padding "1 2" --margin "1 0" --align left "${message[@]}"
-}
-
-gum_section() {
-  local message=("$@")
-  if [[ "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" == "1" ]] || ! command -v gum >/dev/null 2>&1; then
-    printf '%s\n' "${message[@]}"
-    return
-  fi
-
-  gum style --foreground 6 --margin "1 0" --align left "${message[@]}"
 }

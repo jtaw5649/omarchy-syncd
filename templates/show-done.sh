@@ -1,4 +1,0 @@
-#!/usr/bin/env bash
-
-echo
-gum spin --spinner globe --title "Done! Press any key to close..." -- bash -lc 'read -n 1 -s'

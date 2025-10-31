@@ -1,9 +1,9 @@
 use std::collections::{BTreeSet, HashSet};
 use std::env;
-use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::fs::{self, OpenOptions};
+use std::io::{self, ErrorKind, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -13,6 +13,8 @@ use tempfile::tempdir;
 use ureq::AgentBuilder;
 use which::which;
 
+use chrono::Local;
+
 use omarchy_syncd::{
     bundles, config, fs_ops, git,
     selector::{self, Choice},
@@ -20,9 +22,120 @@ use omarchy_syncd::{
 
 use config::{FileConfig, RepoConfig, SyncConfig, load_config, write_config};
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
 const UPDATE_CHECK_URL: &str =
     "https://raw.githubusercontent.com/jtaw5649/omarchy-syncd/master/version";
 const UPDATE_USER_AGENT: &str = concat!("omarchy-syncd/", env!("CARGO_PKG_VERSION"));
+const ACTIVITY_LOG_FILE: &str = "activity.log";
+
+fn resolve_state_dir() -> Result<PathBuf> {
+    if let Ok(dir) = env::var("OMARCHY_SYNCD_STATE_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+    let home = env::var("HOME").context("HOME environment variable not set")?;
+    Ok(PathBuf::from(home).join(".local/share/omarchy-syncd"))
+}
+
+fn ensure_state_dir() -> Result<PathBuf> {
+    let dir = resolve_state_dir()?;
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("Failed to create state directory {}", dir.display()))?;
+    Ok(dir)
+}
+
+fn activity_log_path() -> Result<PathBuf> {
+    let dir = ensure_state_dir()?;
+    Ok(dir.join(ACTIVITY_LOG_FILE))
+}
+
+fn log_event(level: &str, message: impl AsRef<str>) {
+    let message_ref = message.as_ref();
+    if env::var("OMARCHY_SYNCD_LOG_STDOUT").as_deref() == Ok("1") {
+        println!("{message_ref}");
+    }
+    if let Ok(path) = activity_log_path() {
+        let mut options = OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        {
+            options.mode(0o600);
+        }
+        if let Ok(mut file) = options.open(&path) {
+            let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
+            let _ = writeln!(file, "[{timestamp}] [{level}] {message_ref}");
+        }
+    }
+}
+
+fn log_info(message: impl AsRef<str>) {
+    log_event("INFO", message);
+}
+
+fn log_warn(message: impl AsRef<str>) {
+    log_event("WARN", message);
+}
+
+fn log_error(message: impl AsRef<str>) {
+    log_event("ERROR", message);
+}
+
+fn maybe_restart_elephant(context: &str) {
+    let running = match Command::new("pgrep")
+        .args(["-x", "elephant"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(status) => status.success(),
+        Err(err) => {
+            if err.kind() == ErrorKind::NotFound {
+                log_warn(format!(
+                    "{context}: 'pgrep' not available; skipping Elephant reload check"
+                ));
+            } else {
+                log_warn(format!("{context}: Failed to check Elephant status: {err}"));
+            }
+            return;
+        }
+    };
+
+    if !running {
+        log_info(format!(
+            "{context}: Elephant not running; no reload necessary"
+        ));
+        return;
+    }
+
+    match Command::new("pkill").args(["-x", "elephant"]).status() {
+        Ok(status) if status.success() => {
+            match Command::new("elephant")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                Ok(_) => log_info(format!(
+                    "{context}: Restarted Elephant to reload menu entries"
+                )),
+                Err(err) => log_warn(format!("{context}: Failed to relaunch Elephant: {err}")),
+            }
+        }
+        Ok(status) => log_warn(format!(
+            "{context}: Failed to stop Elephant cleanly (status {:?})",
+            status.code()
+        )),
+        Err(err) => {
+            if err.kind() == ErrorKind::NotFound {
+                log_warn(format!(
+                    "{context}: 'pkill' not available; skipping Elephant restart"
+                ));
+            } else {
+                log_warn(format!("{context}: Failed to stop Elephant: {err}"));
+            }
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -155,11 +268,31 @@ fn main() -> Result<()> {
 }
 
 fn cmd_backup(args: BackupArgs) -> Result<()> {
+    log_info("backup: started");
+    let result = backup_inner(&args);
+    match &result {
+        Ok(_) => log_info("backup: completed successfully"),
+        Err(err) => log_error(format!("backup: failed - {err:?}")),
+    }
+    result
+}
+
+fn backup_inner(args: &BackupArgs) -> Result<()> {
     let cfg = load_config()?;
     cfg.ensure_non_empty_paths()?;
+    log_info("backup: configuration loaded");
 
     let resolved_paths = cfg.resolved_paths()?;
+    log_info(format!(
+        "backup: {} configured paths available",
+        resolved_paths.len()
+    ));
+
     let mut selected_paths = if !args.paths.is_empty() {
+        log_info(format!(
+            "backup: explicit paths supplied ({} entries)",
+            args.paths.len()
+        ));
         let normalized = normalize_paths(args.paths.clone());
         validate_paths(&resolved_paths, &normalized)?;
         normalized
@@ -170,6 +303,7 @@ fn cmd_backup(args: BackupArgs) -> Result<()> {
     let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let should_prompt = args.paths.is_empty() && !args.all && !args.no_ui && is_tty;
     if should_prompt {
+        log_info("backup: launching selector for path selection");
         let choices: Vec<Choice> = resolved_paths
             .iter()
             .map(|path| Choice {
@@ -188,32 +322,71 @@ fn cmd_backup(args: BackupArgs) -> Result<()> {
             validate_paths(&resolved_paths, &normalized)?;
             selected_paths = normalized;
         }
+    } else if args.all {
+        log_info("backup: --all supplied, selecting all configured paths");
+    } else if args.no_ui || !is_tty {
+        log_info("backup: running non-interactively; skipping selector");
     }
 
     if selected_paths.is_empty() {
         selected_paths = resolved_paths;
     }
+    log_info(format!(
+        "backup: proceeding with {} paths",
+        selected_paths.len()
+    ));
 
     let temp = tempdir().context("Failed to create temporary directory")?;
+    log_info(format!(
+        "backup: created temporary workspace at {}",
+        temp.path().display()
+    ));
     let repo_dir = temp.path().join("repo");
     git::clone_repo(&cfg.repo.url, &cfg.repo.branch, &repo_dir)
         .context("Failed to clone repository")?;
+    log_info(format!(
+        "backup: cloned {} ({})",
+        cfg.repo.url, cfg.repo.branch
+    ));
     fs_ops::snapshot(&selected_paths, &repo_dir)?;
+    log_info("backup: snapshot completed");
 
     let message = args
         .message
+        .clone()
         .unwrap_or_else(|| "Automated backup".to_string());
     git::commit_and_push(&repo_dir, &message, &cfg.repo.branch)?;
     println!("Backup complete.");
+    log_info("backup: repository committed and pushed");
     Ok(())
 }
 
 fn cmd_restore(args: RestoreArgs) -> Result<()> {
+    log_info("restore: started");
+    let result = restore_inner(&args);
+    match &result {
+        Ok(_) => log_info("restore: completed successfully"),
+        Err(err) => log_error(format!("restore: failed - {err:?}")),
+    }
+    result
+}
+
+fn restore_inner(args: &RestoreArgs) -> Result<()> {
     let cfg = load_config()?;
     cfg.ensure_non_empty_paths()?;
+    log_info("restore: configuration loaded");
 
     let resolved_paths = cfg.resolved_paths()?;
+    log_info(format!(
+        "restore: {} configured paths available",
+        resolved_paths.len()
+    ));
+
     let mut selected_paths = if !args.paths.is_empty() {
+        log_info(format!(
+            "restore: explicit paths supplied ({} entries)",
+            args.paths.len()
+        ));
         let normalized = normalize_paths(args.paths.clone());
         validate_paths(&resolved_paths, &normalized)?;
         normalized
@@ -242,18 +415,35 @@ fn cmd_restore(args: RestoreArgs) -> Result<()> {
             validate_paths(&resolved_paths, &normalized)?;
             selected_paths = normalized;
         }
+    } else if args.all {
+        log_info("restore: --all supplied, selecting all configured paths");
+    } else if args.no_ui || !is_tty {
+        log_info("restore: running non-interactively; skipping selector");
     }
 
     if selected_paths.is_empty() {
         selected_paths = resolved_paths;
     }
+    log_info(format!(
+        "restore: proceeding with {} paths",
+        selected_paths.len()
+    ));
 
     let temp = tempdir().context("Failed to create temporary directory")?;
+    log_info(format!(
+        "restore: created temporary workspace at {}",
+        temp.path().display()
+    ));
     let repo_dir = temp.path().join("repo");
     git::clone_repo(&cfg.repo.url, &cfg.repo.branch, &repo_dir)
         .context("Failed to clone repository")?;
+    log_info(format!(
+        "restore: cloned {} ({})",
+        cfg.repo.url, cfg.repo.branch
+    ));
     fs_ops::restore(&selected_paths, &repo_dir)?;
     println!("Restore complete.");
+    log_info("restore: files restored to workspace");
 
     match Command::new("hyprctl").arg("reload").status() {
         Ok(status) if status.success() => println!("hyprctl reload executed."),
@@ -267,6 +457,8 @@ fn cmd_restore(args: RestoreArgs) -> Result<()> {
             }
         }
     }
+    log_info("restore: hyprctl reload invocation finished");
+    maybe_restart_elephant("restore");
 
     Ok(())
 }
@@ -336,7 +528,11 @@ fn cmd_install(args: InstallArgs) -> Result<()> {
 }
 
 fn cmd_menu() -> Result<()> {
+    log_info("menu: launched");
     let update_version = check_for_update();
+    if let Some(ref v) = update_version {
+        log_info(format!("menu: update available {v}"));
+    }
     let mut menu_entries: Vec<(String, String, String)> = Vec::new();
     if let Some(ref latest) = update_version {
         menu_entries.push((
@@ -346,7 +542,6 @@ fn cmd_menu() -> Result<()> {
         ));
     }
 
-    let header = "Enter runs selection • Esc cancels";
     let static_entries = [
         ("install", "Install", "Configure tracked bundles or paths"),
         (
@@ -374,6 +569,13 @@ fn cmd_menu() -> Result<()> {
         ));
     }
 
+    if let Ok(choice) = env::var("OMARCHY_SYNCD_MENU_CHOICE") {
+        log_info(format!("menu: environment selection {choice}"));
+        return handle_menu_choice(choice.trim(), update_version.is_some());
+    }
+
+    let header = "Enter runs selection • Esc cancels";
+
     let max_title_len = menu_entries
         .iter()
         .map(|(_, title, _)| title.len())
@@ -389,31 +591,74 @@ fn cmd_menu() -> Result<()> {
 
     let selection =
         selector::single_select("Omarchy Syncd (type to filter) >", header, &choices, &[])?;
-    match selection.as_str() {
+    log_info(format!("menu: user selected {}", selection));
+    handle_menu_choice(selection.as_str(), update_version.is_some())
+}
+
+fn handle_menu_choice(choice: &str, update_available: bool) -> Result<()> {
+    match choice {
         "update" => {
-            if let Err(err) = run_update_now() {
-                eprintln!("omarchy-syncd-update failed: {err}");
+            if update_available {
+                log_info("menu: invoking update helper");
+                if let Err(err) = run_update_now() {
+                    log_error(format!("menu: update helper failed - {err:?}"));
+                    eprintln!("omarchy-syncd-update failed: {err}");
+                }
             }
+            log_info("menu: update option completed");
             Ok(())
         }
-        "install" => run_subcommand(&["install"]),
-        "backup" => run_subcommand(&["backup"]),
-        "restore" => run_subcommand(&["restore"]),
-        "config" => run_subcommand(&["config"]),
-        "uninstall" => run_subcommand(&["uninstall"]),
+        "install" => {
+            log_info("menu: launching install subcommand");
+            run_subcommand(&["install"])
+        }
+        "backup" => {
+            log_info("menu: launching backup subcommand");
+            run_subcommand(&["backup"])
+        }
+        "restore" => {
+            log_info("menu: launching restore subcommand");
+            run_subcommand(&["restore"])
+        }
+        "config" => {
+            log_info("menu: launching config subcommand");
+            run_subcommand(&["config"])
+        }
+        "uninstall" => {
+            log_info("menu: launching uninstall subcommand");
+            run_subcommand(&["uninstall"])
+        }
         other => anyhow::bail!("Unknown selection {other}"),
     }
 }
 
 fn cmd_config(args: ConfigArgs) -> Result<()> {
+    log_info("config: started");
+    let result = config_inner(&args);
+    match &result {
+        Ok(_) => log_info("config: completed successfully"),
+        Err(err) => log_error(format!("config: failed - {err:?}")),
+    }
+    result
+}
+
+fn config_inner(args: &ConfigArgs) -> Result<()> {
     if args.write {
         let repo_url = args
             .repo_url
             .clone()
             .ok_or_else(|| anyhow::anyhow!("--repo-url is required when using --write"))?;
+        log_info(format!("config: writing configuration for repo {repo_url}"));
         let mut bundles = args.bundles.clone();
         if args.include_defaults {
+            log_info("config: including default bundles");
             bundles.extend(bundles::DEFAULT_BUNDLE_IDS.iter().map(|id| id.to_string()));
+        }
+        if !args.paths.is_empty() {
+            log_info(format!(
+                "config: explicit paths supplied ({} entries)",
+                args.paths.len()
+            ));
         }
         let write_opts = ConfigWriteOptions {
             repo_url,
@@ -425,6 +670,10 @@ fn cmd_config(args: ConfigArgs) -> Result<()> {
         };
         let written_path = write_sync_configuration(write_opts)?;
         println!("Wrote config to {}", written_path.display());
+        log_info(format!(
+            "config: configuration written to {}",
+            written_path.display()
+        ));
         return Ok(());
     }
 
@@ -432,6 +681,7 @@ fn cmd_config(args: ConfigArgs) -> Result<()> {
 
     if args.print_path {
         println!("{}", config_path.display());
+        log_info(format!("config: printed path {}", config_path.display()));
         return Ok(());
     }
 
@@ -439,8 +689,13 @@ fn cmd_config(args: ConfigArgs) -> Result<()> {
         let created = ensure_config_file(&config_path)?;
         if created {
             println!("Created config at {}", config_path.display());
+            log_info(format!(
+                "config: created new config at {}",
+                config_path.display()
+            ));
         } else {
             println!("Config already exists at {}", config_path.display());
+            log_info("config: create requested but file already existed");
         }
         return Ok(());
     }
@@ -474,16 +729,25 @@ fn cmd_config(args: ConfigArgs) -> Result<()> {
         &choices,
         &["ctrl-o:accept"],
     )?;
+    log_info(format!("config: action selected {selection}"));
 
     match selection.as_str() {
-        "open_editor" => open_config_in_editor(args.editor.clone())?,
-        "print_path" => println!("{}", config_path.display()),
+        "open_editor" => {
+            log_info("config: opening editor");
+            open_config_in_editor(args.editor.clone())?
+        }
+        "print_path" => {
+            println!("{}", config_path.display());
+            log_info("config: printed config path");
+        }
         "ensure_exists" => {
             let created = ensure_config_file(&config_path)?;
             if created {
                 println!("Created config at {}", config_path.display());
+                log_info("config: ensured config file (created)");
             } else {
                 println!("Config already exists at {}", config_path.display());
+                log_info("config: ensured config file (already present)");
             }
         }
         other => anyhow::bail!("Unknown selection {other}"),
@@ -493,11 +757,22 @@ fn cmd_config(args: ConfigArgs) -> Result<()> {
 }
 
 fn cmd_uninstall(args: UninstallArgs) -> Result<()> {
+    log_info("uninstall: started");
+    let result = uninstall_inner(&args);
+    match &result {
+        Ok(_) => log_info("uninstall: completed successfully"),
+        Err(err) => log_error(format!("uninstall: failed - {err:?}")),
+    }
+    result
+}
+
+fn uninstall_inner(args: &UninstallArgs) -> Result<()> {
     if !args.yes {
         let proceed =
             prompt_yes_no("This will remove omarchy-syncd completely. Do you wish to continue?")?;
         if !proceed {
             println!("Uninstall cancelled.");
+            log_info("uninstall: cancelled by user");
             return Ok(());
         }
     }
@@ -521,24 +796,36 @@ fn cmd_uninstall(args: UninstallArgs) -> Result<()> {
         remove_file_if_exists(&bin_dir.join(base))?;
         remove_file_if_exists(&bin_dir.join(format!("{base}.sh")))?;
     }
+    log_info("uninstall: helper wrappers removed");
 
     // Remove the primary binary last
     remove_file_if_exists(&bin_dir.join("omarchy-syncd"))?;
+    log_info("uninstall: primary binary removed");
 
     // Remove configuration directory
     let config_path = config::config_file_path()?;
     if config_path.exists() {
         fs::remove_file(&config_path)
             .with_context(|| format!("Failed removing {}", config_path.display()))?;
+        log_info(format!(
+            "uninstall: removed config file {}",
+            config_path.display()
+        ));
     }
     let config_dir = config::config_dir()?;
     if config_dir.exists() {
         fs::remove_dir_all(&config_dir)
             .with_context(|| format!("Failed removing {}", config_dir.display()))?;
+        log_info(format!(
+            "uninstall: removed config directory {}",
+            config_dir.display()
+        ));
     }
 
     remove_elephant_menu()?;
     remove_elephant_icon()?;
+    log_info("uninstall: elephant assets removed");
+    maybe_restart_elephant("uninstall");
 
     println!("omarchy-syncd has been uninstalled.");
     Ok(())
@@ -903,12 +1190,45 @@ fn check_for_update() -> Option<Version> {
         return None;
     }
 
-    let latest = fetch_latest_version()?;
+    let latest = if let Ok(forced) = env::var("OMARCHY_SYNCD_FORCE_UPDATE_VERSION") {
+        let trimmed = forced.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        match Version::parse(trimmed) {
+            Ok(version) => version,
+            Err(_) => return None,
+        }
+    } else {
+        fetch_latest_version()?
+    };
+
+    announce_update(latest)
+}
+
+fn fetch_latest_version() -> Option<Version> {
+    let agent = AgentBuilder::new().timeout(Duration::from_secs(3)).build();
+    let response = agent
+        .get(UPDATE_CHECK_URL)
+        .set("User-Agent", UPDATE_USER_AGENT)
+        .call()
+        .ok()?;
+    let body = response.into_string().ok()?;
+    let version_str = body.lines().next()?.trim();
+    Version::parse(version_str).ok()
+}
+
+fn announce_update(latest: Version) -> Option<Version> {
     let current = Version::parse(env!("CARGO_PKG_VERSION")).ok()?;
     if latest <= current {
         return None;
     }
 
+    display_update_message(&current, &latest);
+    Some(latest)
+}
+
+fn display_update_message(current: &Version, latest: &Version) {
     let message = format!(
         "Update available: {current} → {latest}\nSelect \"Update\" from the menu to run omarchy-syncd-update."
     );
@@ -928,18 +1248,4 @@ fn check_for_update() -> Option<Version> {
     } else {
         println!("{}", message);
     }
-
-    Some(latest)
-}
-
-fn fetch_latest_version() -> Option<Version> {
-    let agent = AgentBuilder::new().timeout(Duration::from_secs(3)).build();
-    let response = agent
-        .get(UPDATE_CHECK_URL)
-        .set("User-Agent", UPDATE_USER_AGENT)
-        .call()
-        .ok()?;
-    let body = response.into_string().ok()?;
-    let version_str = body.lines().next()?.trim();
-    Version::parse(version_str).ok()
 }
