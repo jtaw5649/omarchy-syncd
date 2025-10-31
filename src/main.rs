@@ -4,10 +4,13 @@ use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
+use semver::Version;
 use tempfile::tempdir;
+use ureq::AgentBuilder;
 use which::which;
 
 use omarchy_syncd::{
@@ -16,6 +19,10 @@ use omarchy_syncd::{
 };
 
 use config::{FileConfig, RepoConfig, SyncConfig, load_config, write_config};
+
+const UPDATE_CHECK_URL: &str =
+    "https://raw.githubusercontent.com/jtaw5649/omarchy-syncd/master/version";
+const UPDATE_USER_AGENT: &str = concat!("omarchy-syncd/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Parser)]
 #[command(
@@ -108,7 +115,7 @@ struct ConfigArgs {
     #[arg(long = "repo-url", requires = "write")]
     repo_url: Option<String>,
     /// Git branch to track when writing a configuration.
-    #[arg(long, default_value = "main")]
+    #[arg(long, default_value = "master")]
     branch: String,
     /// Extra bundles to include when writing a configuration.
     #[arg(long = "bundle")]
@@ -329,8 +336,18 @@ fn cmd_install(args: InstallArgs) -> Result<()> {
 }
 
 fn cmd_menu() -> Result<()> {
+    let update_version = check_for_update();
+    let mut menu_entries: Vec<(String, String, String)> = Vec::new();
+    if let Some(ref latest) = update_version {
+        menu_entries.push((
+            "update".to_string(),
+            format!("Update to {latest}"),
+            "Run omarchy-syncd-update now".to_string(),
+        ));
+    }
+
     let header = "Enter runs selection • Esc cancels";
-    let menu_entries = [
+    let static_entries = [
         ("install", "Install", "Configure tracked bundles or paths"),
         (
             "backup",
@@ -349,6 +366,14 @@ fn cmd_menu() -> Result<()> {
             "Remove omarchy-syncd and its config",
         ),
     ];
+    for (id, title, description) in static_entries.iter() {
+        menu_entries.push((
+            (*id).to_string(),
+            (*title).to_string(),
+            (*description).to_string(),
+        ));
+    }
+
     let max_title_len = menu_entries
         .iter()
         .map(|(_, title, _)| title.len())
@@ -357,7 +382,7 @@ fn cmd_menu() -> Result<()> {
     let choices: Vec<Choice> = menu_entries
         .iter()
         .map(|(id, title, description)| Choice {
-            id: (*id).to_string(),
+            id: id.clone(),
             label: format!("{title:<width$}  {description}", width = max_title_len),
         })
         .collect();
@@ -365,6 +390,12 @@ fn cmd_menu() -> Result<()> {
     let selection =
         selector::single_select("Omarchy Syncd (type to filter) >", header, &choices, &[])?;
     match selection.as_str() {
+        "update" => {
+            if let Err(err) = run_update_now() {
+                eprintln!("omarchy-syncd-update failed: {err}");
+            }
+            Ok(())
+        }
         "install" => run_subcommand(&["install"]),
         "backup" => run_subcommand(&["backup"]),
         "restore" => run_subcommand(&["restore"]),
@@ -726,6 +757,20 @@ fn run_subcommand(args: &[&str]) -> Result<()> {
     }
 }
 
+fn run_update_now() -> Result<()> {
+    let status = Command::new("omarchy-syncd-update")
+        .status()
+        .context("Failed to launch omarchy-syncd-update")?;
+    if status.success() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "omarchy-syncd-update exited with status {:?}",
+            status.code()
+        );
+    }
+}
+
 fn find_default_editor() -> Option<String> {
     const CANDIDATES: &[&str] = &["nano", "vi", "vim", "nvim", "code", "gedit"];
     for candidate in CANDIDATES {
@@ -851,4 +896,50 @@ fn remove_elephant_icon() -> Result<()> {
     let path = elephant_icon_path()?;
     remove_file_if_exists(&path)?;
     Ok(())
+}
+
+fn check_for_update() -> Option<Version> {
+    if env::var("OMARCHY_SYNCD_SKIP_UPDATE_CHECK").unwrap_or_default() == "1" {
+        return None;
+    }
+
+    let latest = fetch_latest_version()?;
+    let current = Version::parse(env!("CARGO_PKG_VERSION")).ok()?;
+    if latest <= current {
+        return None;
+    }
+
+    let message = format!(
+        "Update available: {current} → {latest}\nSelect \"Update\" from the menu to run omarchy-syncd-update."
+    );
+    if selector::gum_available() {
+        let _ = Command::new("gum")
+            .args([
+                "style",
+                "--border",
+                "normal",
+                "--border-foreground",
+                "6",
+                "--padding",
+                "1 2",
+            ])
+            .arg(&message)
+            .status();
+    } else {
+        println!("{}", message);
+    }
+
+    Some(latest)
+}
+
+fn fetch_latest_version() -> Option<Version> {
+    let agent = AgentBuilder::new().timeout(Duration::from_secs(3)).build();
+    let response = agent
+        .get(UPDATE_CHECK_URL)
+        .set("User-Agent", UPDATE_USER_AGENT)
+        .call()
+        .ok()?;
+    let body = response.into_string().ok()?;
+    let version_str = body.lines().next()?.trim();
+    Version::parse(version_str).ok()
 }

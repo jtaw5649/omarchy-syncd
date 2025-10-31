@@ -1,6 +1,6 @@
 [package]
 name = "omarchy-syncd"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2024"
 
 [dependencies]
@@ -15,6 +15,10 @@ tempfile = "3"
 toml = "0.8"
 walkdir = "2.5"
 which = "5"
+semver = "1"
+ureq = { version = "2", features = ["tls"] }
 
 [dev-dependencies]
 assert_cmd = "2"
+ptyprocess = "0.4"
+nix = { version = "0.27", features = ["poll"] }

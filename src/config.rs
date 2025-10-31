@@ -55,7 +55,7 @@ impl SyncConfig {
 }
 
 pub fn default_branch() -> String {
-    "main".to_string()
+    "master".to_string()
 }
 
 pub fn config_dir() -> Result<PathBuf> {

@@ -49,12 +49,12 @@ fn init_remote_repo(base: &Path, name: &str) -> Result<PathBuf> {
     fs::write(seed_dir.path().join("README.md"), "seed\n")?;
     run_git(Some(seed_dir.path()), &["add", "."])?;
     run_git(Some(seed_dir.path()), &["commit", "-m", "Initial seed"])?;
-    run_git(Some(seed_dir.path()), &["branch", "-M", "main"])?;
+    run_git(Some(seed_dir.path()), &["branch", "-M", "master"])?;
     run_git(
         Some(seed_dir.path()),
         &["remote", "add", "origin", path_str(&remote)?],
     )?;
-    run_git(Some(seed_dir.path()), &["push", "-u", "origin", "main"])?;
+    run_git(Some(seed_dir.path()), &["push", "-u", "origin", "master"])?;
     run_git(
         None,
         &[
@@ -147,7 +147,7 @@ fn init_with_defaults_and_extra_path_writes_config() -> Result<()> {
     let cfg: omarchy_syncd::config::SyncConfig = toml::from_str(&raw)?;
 
     assert_eq!(cfg.repo.url, path_str(&remote)?);
-    assert_eq!(cfg.repo.branch, "main");
+    assert_eq!(cfg.repo.branch, "master");
 
     let unique: HashSet<_> = cfg.files.paths.iter().collect();
     assert_eq!(

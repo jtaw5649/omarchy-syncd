@@ -15,7 +15,7 @@ const BUNDLE_DEFINITIONS: &[Bundle] = &[
     Bundle {
         id: "core_desktop",
         name: "Core Desktop",
-        description: "Hyprland, Waybar, Omarchy theme data, SwayOSD, WayVNC",
+        description: "Hyprland, Waybar, Omarchy data, SwayOSD, WayVNC",
         paths: &[
             "~/.config/hypr",
             "~/.config/waybar",
