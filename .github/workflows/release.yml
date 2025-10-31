@@ -32,13 +32,18 @@ jobs:
       - name: Stage release package
         run: |
           rm -rf dist
-          mkdir -p dist/package/scripts
+          mkdir -p dist/package/scripts dist/package/install dist/package/bin
           cp "target/$TARGET/release/omarchy-syncd" dist/package/
           cp install.sh README.md dist/package/
+          cp version dist/package/
           cp icon.png dist/package/ || true
           cp logo.txt dist/package/ || true
           cp -a scripts/. dist/package/scripts/
-          chmod +x dist/package/install.sh dist/package/omarchy-syncd dist/package/scripts/*
+          cp -a install/. dist/package/install/
+          if [ -d bin ]; then
+            cp -a bin/. dist/package/bin/
+          fi
+          chmod +x dist/package/install.sh dist/package/omarchy-syncd dist/package/scripts/* dist/package/bin/* || true
 
       - name: Create archive
         id: package

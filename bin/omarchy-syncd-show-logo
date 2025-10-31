@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+clear
+logo_path="${OMARCHY_SYNCD_LOGO_PATH:-$HOME/.local/share/omarchy-syncd/logo.txt}"
+if [[ -f "$logo_path" ]]; then
+  printf '\033[32m'
+  cat "$logo_path"
+  printf '\033[0m\n'
+  echo
+fi

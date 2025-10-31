@@ -1,14 +1,117 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Determine repository root early so presentation helpers can align prompts.
+SCRIPT_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  SCRIPT_DIR="$(
+    cd -- "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 || exit 0
+    pwd -P
+  )"
+fi
+
+if [[ -n "$SCRIPT_DIR" ]]; then
+  export OMARCHY_SYNCD_ROOT="$SCRIPT_DIR"
+  export OMARCHY_SYNCD_INSTALL="${OMARCHY_SYNCD_ROOT}/install"
+  export OMARCHY_SYNCD_LOGO_PATH="${OMARCHY_SYNCD_LOGO_PATH:-$OMARCHY_SYNCD_ROOT/logo.txt}"
+  if [[ -f "$OMARCHY_SYNCD_INSTALL/helpers/presentation.sh" ]]; then
+    # Sets gum padding/colours so early confirms match Omarchy style.
+    source "$OMARCHY_SYNCD_INSTALL/helpers/presentation.sh"
+  fi
+fi
+
+ask_yes_no() {
+  local prompt="$1"
+  local default="${2:-false}"
+
+  if [[ ! -t 0 ]]; then
+    return 1
+  fi
+
+  if [[ "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" != "1" ]] && command -v gum >/dev/null 2>&1; then
+    local gum_args=()
+    if [[ "$default" == "true" ]]; then
+      gum_args+=(--default)
+    fi
+    if gum confirm "${gum_args[@]}" "$prompt"; then
+      return 0
+    else
+      return 1
+    fi
+  fi
+
+  local answer=""
+  local hint="[y/N]"
+  if [[ "$default" == "true" ]]; then
+    hint="[Y/n]"
+  fi
+
+  while true; do
+    read -r -p "$prompt $hint " answer || return 2
+    answer=${answer,,}
+
+    if [[ -z "$answer" ]]; then
+      if [[ "$default" == "true" ]]; then
+        return 0
+      else
+        return 1
+      fi
+    fi
+
+    case "$answer" in
+      y|yes) return 0 ;;
+      n|no) return 1 ;;
+      *) echo "Please answer 'y' or 'n'." ;;
+    esac
+  done
+}
+
+# Relaunch via presentation helper for consistent UX
+if [[ -z "${OMARCHY_SYNCD_LAUNCHED_WITH_PRESENTATION:-}" && "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" != "1" ]]; then
+  if command -v omarchy-syncd-launcher >/dev/null 2>&1; then
+    cmd=$(printf '%q ' "$0" "$@")
+    exec env OMARCHY_SYNCD_LAUNCHED_WITH_PRESENTATION=1 omarchy-syncd-launcher "$cmd"
+  fi
+fi
+
+if [[ -t 0 ]]; then
+  if [[ "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" != "1" ]] && command -v gum >/dev/null 2>&1; then
+    gum style --border normal --border-foreground 6 --padding "1 2" --margin "1 0" \
+      "Ready to install omarchy-syncd?" \
+      "" \
+      "• We'll install omarchy-syncd binaries and helpers." \
+      "• Rerun this installer any time to update or repair."
+
+    if ! gum confirm --default=true "Continue with install?"; then
+      echo "Installation cancelled."
+      exit 0
+    fi
+
+    if [[ -z "${OMARCHY_SYNCD_SHOW_INSTALL_LOG+x}" ]]; then
+      export OMARCHY_SYNCD_SHOW_INSTALL_LOG=1
+    fi
+  else
+    echo
+    if ! ask_yes_no "Ready to install omarchy-syncd?" true; then
+      echo "Installation cancelled."
+      exit 0
+    fi
+  fi
+fi
+
+
+# --- Platform helpers -------------------------------------------------------
+
 detect_target_triple() {
   if [[ "${OMARCHY_SYNCD_FORCE_PLATFORM:-}" == "arch" ]]; then
     echo "x86_64-unknown-linux-gnu"
     return 0
   fi
+
   if [[ -n "${OMARCHY_SYNCD_FORCE_PLATFORM:-}" && "${OMARCHY_SYNCD_FORCE_PLATFORM}" != "arch" ]]; then
     return 1
   fi
+
   local sys arch
   sys=$(uname -s 2>/dev/null || echo unknown)
   arch=$(uname -m 2>/dev/null || echo unknown)
@@ -42,10 +145,7 @@ assert_supported_platform() {
   if [[ -r /etc/os-release ]]; then
     # shellcheck disable=SC1091
     . /etc/os-release
-    if [[ "${ID:-}" == "arch" ]]; then
-      return
-    fi
-    if [[ "${ID_LIKE:-}" == *"arch"* ]]; then
+    if [[ "${ID:-}" == "arch" || "${ID_LIKE:-}" == *"arch"* ]]; then
       return
     fi
   fi
@@ -59,6 +159,8 @@ assert_supported_platform() {
 }
 
 assert_supported_platform
+
+# --- Download helpers -------------------------------------------------------
 
 download_release() {
   local url="$1"
@@ -79,8 +181,8 @@ download_release() {
   return 1
 }
 
-# Bootstrapping: when this script is executed via curl|bash it is not inside
-# a cloned repository. Detect that case, clone the repo, and re-run from there.
+# --- Bootstrap --------------------------------------------------------------
+
 if [[ "${OMARCHY_SYNCD_BOOTSTRAPPED:-0}" != "1" ]]; then
   script_dir=""
   if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
@@ -96,6 +198,7 @@ if [[ "${OMARCHY_SYNCD_BOOTSTRAPPED:-0}" != "1" ]]; then
     CLONE_DEPTH=${OMARCHY_SYNCD_CLONE_DEPTH:-1}
     RELEASE_BASE_URL=${OMARCHY_SYNCD_RELEASE_BASE_URL:-https://github.com/jtaw5649/omarchy-syncd/releases/latest/download}
     RELEASE_TARBALL_URL=${OMARCHY_SYNCD_RELEASE_URL:-}
+
     if [[ -z "$RELEASE_TARBALL_URL" ]]; then
       if target_triple=$(detect_target_triple); then
         RELEASE_TARBALL_URL="$RELEASE_BASE_URL/omarchy-syncd-${target_triple}.tar.gz"
@@ -110,9 +213,7 @@ if [[ "${OMARCHY_SYNCD_BOOTSTRAPPED:-0}" != "1" ]]; then
     fi
 
     TMP_DIR=$(mktemp -d)
-    cleanup() {
-      rm -rf "$TMP_DIR"
-    }
+    cleanup() { rm -rf "$TMP_DIR"; }
     trap cleanup EXIT
 
     if [[ "${OMARCHY_SYNCD_USE_SOURCE:-0}" != "1" && -n "$RELEASE_TARBALL_URL" ]]; then
@@ -144,101 +245,111 @@ if [[ "${OMARCHY_SYNCD_BOOTSTRAPPED:-0}" != "1" ]]; then
 
     echo "Fetching omarchy-syncd from $REPO_URL (branch: $REPO_BRANCH)..."
     git clone --depth "$CLONE_DEPTH" --branch "$REPO_BRANCH" "$REPO_URL" "$TMP_DIR" >/dev/null
-
     OMARCHY_SYNCD_BOOTSTRAPPED=1 "$TMP_DIR/install.sh" "$@"
     exit $?
   fi
 fi
 
-# Determine project root (directory containing this script).
-PROJECT_ROOT="$(
-  cd -- "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1
-  pwd -P
-)"
+# --- Environment ------------------------------------------------------------
+
+OMARCHY_SYNCD_ROOT="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
+export OMARCHY_SYNCD_ROOT
+export OMARCHY_SYNCD_INSTALL="$OMARCHY_SYNCD_ROOT/install"
+export OMARCHY_SYNCD_LOGO_PATH="${OMARCHY_SYNCD_LOGO_PATH:-$OMARCHY_SYNCD_ROOT/logo.txt}"
 
 TARGET_DIR="${1:-$HOME/.local/bin}"
-BIN_NAME="omarchy-syncd"
-PREBUILT_BIN="$PROJECT_ROOT/$BIN_NAME"
-SOURCE_BUILD_BIN="$PROJECT_ROOT/target/release/$BIN_NAME"
+export OMARCHY_SYNCD_BIN_DIR="$TARGET_DIR"
+export OMARCHY_SYNCD_STATE_DIR="${OMARCHY_SYNCD_STATE_DIR:-$HOME/.local/share/omarchy-syncd}"
+export OMARCHY_SYNCD_ICON_DIR="${OMARCHY_SYNCD_ICON_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/icons}"
+
+unset OMARCHY_SYNCD_DONE_MESSAGE OMARCHY_SYNCD_EXAMPLE_NOTE OMARCHY_SYNCD_CONFIG_UPDATED_NOTE OMARCHY_SYNCD_EXAMPLE_CREATED
+
+source "$OMARCHY_SYNCD_INSTALL/helpers/all.sh"
+
+PREBUILT_BIN="$OMARCHY_SYNCD_ROOT/omarchy-syncd"
+SOURCE_BUILD_BIN="$OMARCHY_SYNCD_ROOT/target/release/omarchy-syncd"
 
 if [[ -f "$PREBUILT_BIN" ]]; then
-  echo "Using prebuilt $BIN_NAME from release package..."
-  BUILD_TARGET="$PREBUILT_BIN"
+  echo "Using prebuilt omarchy-syncd from release package..."
+  export OMARCHY_SYNCD_BIN_SOURCE="$PREBUILT_BIN"
 elif [[ -f "$SOURCE_BUILD_BIN" ]]; then
   echo "Using existing build artifact at $SOURCE_BUILD_BIN..."
-  BUILD_TARGET="$SOURCE_BUILD_BIN"
+  export OMARCHY_SYNCD_BIN_SOURCE="$SOURCE_BUILD_BIN"
 else
   if ! command -v cargo >/dev/null 2>&1; then
     echo "error: cargo is required to build omarchy-syncd. Install Rust from https://rustup.rs/ first." >&2
     exit 1
   fi
-  echo "Building $BIN_NAME in release mode..."
-  cargo build --release --manifest-path "$PROJECT_ROOT/Cargo.toml"
-  BUILD_TARGET="$SOURCE_BUILD_BIN"
+  echo "Building omarchy-syncd in release mode..."
+  cargo build --release --manifest-path "$OMARCHY_SYNCD_ROOT/Cargo.toml"
+  export OMARCHY_SYNCD_BIN_SOURCE="$SOURCE_BUILD_BIN"
 fi
 
-mkdir -p "$TARGET_DIR"
-cp "$BUILD_TARGET" "$TARGET_DIR/"
+source "$OMARCHY_SYNCD_INSTALL/preflight/all.sh"
+source "$OMARCHY_SYNCD_INSTALL/packaging/all.sh"
+source "$OMARCHY_SYNCD_INSTALL/config/all.sh"
+source "$OMARCHY_SYNCD_INSTALL/post-install/all.sh"
 
-HELPER_BASENAMES=(
-  "omarchy-syncd-menu"
-  "omarchy-syncd-install"
-  "omarchy-syncd-backup"
-  "omarchy-syncd-restore"
-  "omarchy-syncd-config"
-  "omarchy-syncd-uninstall"
-)
-for helper in "${HELPER_BASENAMES[@]}"; do
-  src="$PROJECT_ROOT/scripts/${helper}.sh"
-  cp "$src" "$TARGET_DIR/${helper}.sh"
-  chmod +x "$TARGET_DIR/${helper}.sh"
-  cp "$src" "$TARGET_DIR/$helper"
-  chmod +x "$TARGET_DIR/$helper"
-done
+stop_install_log
+trap - ERR INT TERM
+clear_logo || true
 
-ICON_SOURCE="$PROJECT_ROOT/icon.png"
-ICON_DEST="${XDG_DATA_HOME:-$HOME/.local/share}/icons/omarchy-syncd.png"
-if [ -f "$ICON_SOURCE" ]; then
-  mkdir -p "$(dirname "$ICON_DEST")"
-  cp "$ICON_SOURCE" "$ICON_DEST"
-  echo "Copied launcher icon to $ICON_DEST"
-else
-  echo "warning: icon.png not found in project root; skipping icon install."
-fi
-
-echo "Installed $BIN_NAME to $TARGET_DIR"
-echo
-echo "Make sure $TARGET_DIR is on your PATH. You can check with:"
-echo "  echo \"export PATH=\\\"$TARGET_DIR:\\\$PATH\\\"\" >> ~/.bashrc"
-
-INSTALLED_BIN="$TARGET_DIR/$BIN_NAME"
+INSTALLED_BIN="$OMARCHY_SYNCD_BIN_DIR/omarchy-syncd"
 CONFIG_PATH="$HOME/.config/omarchy-syncd/config.toml"
-LEGACY_CONFIG="$HOME/.config/syncd/config.toml"
+ICON_DEST="$OMARCHY_SYNCD_ICON_DIR/omarchy-syncd.png"
 
-ask_yes_no() {
+DEFAULT_BUNDLE_IDS=(
+  "core_desktop"
+  "terminals"
+  "cli_tools"
+  "editors"
+  "dev_git"
+  "creative"
+  "system"
+)
+
+DEFAULT_BUNDLE_LABELS=(
+  "Core Desktop - Hyprland, Waybar, Omarchy, SwayOSD, WayVNC"
+  "Terminals - Alacritty, Ghostty, Kitty"
+  "CLI Tools - btop, fastfetch, eza, cava, Walker"
+  "Editors - Neovim, Typora"
+  "Git Tooling - git, lazygit, gh configs"
+  "Creative Tools - Aether, Elephant assets"
+  "System Services - user systemd units"
+)
+
+# --- Interactive helpers ----------------------------------------------------
+
+prompt_string() {
   local prompt="$1"
-  local answer
-  while true; do
-    if ! read -r -p "$prompt [y/n] " answer; then
-      return 2
+  local default="${2:-}"
+
+  if [[ ! -t 0 ]]; then
+    echo "$default"
+    return
+  fi
+
+  if [[ "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" != "1" ]] && command -v gum >/dev/null 2>&1; then
+    gum input --prompt "$prompt " --value "$default"
+  else
+    local value
+    read -r -p "$prompt " value || return 1
+    if [[ -z "$value" ]]; then
+      echo "$default"
+    else
+      echo "$value"
     fi
-    answer=${answer,,}
-    case "$answer" in
-      y|yes) return 0 ;;
-      n|no) return 1 ;;
-      *) echo "Please answer 'y' or 'n'." ;;
-    esac
-  done
+  fi
 }
 
 write_elephant_menu() {
   local menu_dir="$HOME/.config/elephant/menus"
   local menu_path="$menu_dir/omarchy-syncd.toml"
-  local tmp
-
   mkdir -p "$menu_dir"
-  tmp="$(mktemp)"
-  cat >"$tmp" <<EOF
+
+  local tmp
+  tmp=$(mktemp)
+  cat >"$tmp" <<EOF_MENU
 # Managed by omarchy-syncd
 name = "omarchy-syncd"
 name_pretty = "Omarchy Syncd"
@@ -247,234 +358,360 @@ global_search = true
 action = "launch"
 
 [actions]
-launch = "$TARGET_DIR/omarchy-syncd-menu"
+launch = "$OMARCHY_SYNCD_BIN_DIR/omarchy-syncd-menu"
 
 [[entries]]
 text = "Omarchy Syncd"
 keywords = ["backup", "restore", "install", "config"]
 terminal = true
-EOF
+EOF_MENU
 
-  if [ -f "$menu_path" ] && ! grep -q "# Managed by omarchy-syncd" "$menu_path"; then
-    echo "Existing Elephant menu at $menu_path is not managed by omarchy-syncd; leaving it untouched."
+  if [[ -f "$menu_path" && ! $(grep -q "# Managed by omarchy-syncd" "$menu_path") ]]; then
+    echo "Existing Elephant menu at $menu_path is unmanaged; leaving untouched."
     rm -f "$tmp"
     return
   fi
 
-  if ! cmp -s "$tmp" "$menu_path"; then
+  if ! cmp -s "$tmp" "$menu_path" >/dev/null 2>&1; then
     mv "$tmp" "$menu_path"
-    echo "Wrote Elephant menu to $menu_path."
+    echo "Elephant menu updated at $menu_path"
   else
     rm -f "$tmp"
-    echo "Elephant menu already up to date at $menu_path."
   fi
 }
 
-if [ -f "$LEGACY_CONFIG" ] && [ ! -f "$CONFIG_PATH" ]; then
-  echo
-  echo "Migrating legacy config from ~/.config/syncd to ~/.config/omarchy-syncd..."
-  mkdir -p "$(dirname "$CONFIG_PATH")"
-  mv "$LEGACY_CONFIG" "$CONFIG_PATH"
-  if [ -d "$HOME/.config/syncd" ] && [ ! "$(ls -A "$HOME/.config/syncd")" ]; then
-    rmdir "$HOME/.config/syncd" 2>/dev/null || true
+append_example_comment() {
+  if [[ -f "$CONFIG_PATH" ]] && ! grep -q '^# Example: add additional paths later$' "$CONFIG_PATH"; then
+    cat <<'EOF' >>"$CONFIG_PATH"
+
+# Example: add additional paths later
+# paths = ["~/.config/example", "~/.local/share/example"]
+# bundles = ["creative"]
+EOF
   fi
-fi
+}
 
-SKIP_INIT=0
-if [ -f "$CONFIG_PATH" ]; then
-  echo
-  echo "Existing config detected at $CONFIG_PATH. Skipping initialization."
-  SKIP_INIT=1
-fi
+write_example_config() {
+  local repo_url="$1"
+  local branch_name="$2"
+  local config_dir="${CONFIG_PATH%/*}"
 
-if [ $SKIP_INIT -eq 0 ]; then
-  if [ ! -t 0 ]; then
-    echo
-    echo "Non-interactive shell detected; skipping configuration. Run 'omarchy-syncd config --write --repo-url <remote> ...' later to set it up."
-    exit 0
+  mkdir -p "$config_dir"
+  cat >"$CONFIG_PATH" <<EOF
+# omarchy-syncd configuration
+[repo]
+url = "$repo_url"
+branch = "$branch_name"
+
+[files]
+paths = []
+bundles = []
+# Example: add additional paths later
+# paths = ["~/.config/example", "~/.local/share/example"]
+# bundles = ["creative"]
+EOF
+}
+
+collect_config() {
+  local config_path="${CONFIG_PATH:-$HOME/.config/omarchy-syncd/config.toml}"
+  local config_preexisted=0
+  local backup_path=""
+  local backup_note=""
+  local example_created=0
+  local example_note=""
+  local config_updated_note=""
+
+  if [[ ! -t 0 ]]; then
+    echo "Non-interactive shell detected; skipping configuration. Run \"omarchy-syncd config --write --repo-url <remote> ...\" later."
+    return
   fi
 
-  if ! git config --global --get user.name >/dev/null 2>&1 || \
-     ! git config --global --get user.email >/dev/null 2>&1; then
-    echo
-    echo "Git is not fully configured (missing user.name / user.email)."
-    echo "Run 'git config --global user.name \"Your Name\"' and 'git config --global user.email \"you@example.com\"', then rerun the installer."
-    exit 1
-  fi
-
-  ask_yes_no "Would you like to create a config now?"
-  init_status=$?
-  if [ $init_status -eq 0 ]; then
-  repo_url=""
-  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-    ask_yes_no "Create a new private GitHub repository via gh?"
-    create_repo_status=$?
-    if [ $create_repo_status -eq 0 ]; then
-      gh_user="$(gh api user -q '.login' 2>/dev/null || true)"
-      default_repo="${gh_user:+$gh_user/}omarchy-dotfiles"
-      if [ -z "$default_repo" ]; then
-        default_repo="omarchy-dotfiles"
-      fi
-      while true; do
-        read -r -p "GitHub repository (owner/name) [$default_repo]: " repo_full
-        repo_full=${repo_full:-$default_repo}
-        if [[ "$repo_full" != */* ]]; then
-          if [ -n "$gh_user" ]; then
-            repo_full="$gh_user/$repo_full"
-          else
-            echo "Unable to determine GitHub username. Specify repo as owner/name."
-            continue
-          fi
+  if [[ -f "$config_path" ]]; then
+    config_preexisted=1
+    if [[ "${OMARCHY_SYNCD_FORCE_RECONFIGURE:-0}" != "1" ]]; then
+      if [[ "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" != "1" ]] && command -v gum >/dev/null 2>&1; then
+        clear_logo || true
+        gum_panel \
+          "Existing omarchy-syncd config found at:" \
+          "$config_path"
+        if ! gum confirm --default=false "Update existing config now?"; then
+          echo "Keeping current configuration. Run \"omarchy-syncd config --write ...\" later if you change your mind."
+          return
         fi
-        break
-      done
-      if gh repo view "$repo_full" >/dev/null 2>&1; then
-        echo "GitHub repository $repo_full already exists; using existing remote."
-        repo_url="git@github.com:${repo_full}.git"
       else
-        echo "Creating GitHub repository $repo_full..."
-        if gh repo create "$repo_full" --private --confirm >/dev/null 2>&1; then
-          repo_url="git@github.com:${repo_full}.git"
-          echo "Created private repository at https://github.com/${repo_full}"
-        else
-          echo "Failed to create GitHub repository (is gh authenticated?)."
-          echo "Run 'gh auth login' or create the repo manually, then rerun the installer."
-          exit 1
+        echo "Existing omarchy-syncd config found at $config_path."
+        if ! ask_yes_no "Update existing config now?" false; then
+          echo "Keeping current configuration. Run \"omarchy-syncd config --write ...\" later if you change your mind."
+          return
         fi
       fi
-    elif [ $create_repo_status -eq 2 ]; then
-      echo
-      echo "Input closed unexpectedly; skipping configuration. Run 'omarchy-syncd config --write --repo-url <remote> ...' later."
-      exit 0
+    fi
+
+    backup_path="${config_path}.bak.$(date +%Y%m%d%H%M%S)"
+    if cp "$config_path" "$backup_path"; then
+      backup_note="Previous config backed up to $backup_path."
+    else
+      backup_note="Previous config could not be backed up automatically."
+    fi
+  fi
+
+  if ! git config --global --get user.name >/dev/null 2>&1 || ! git config --global user.email >/dev/null 2>&1; then
+    echo "Git is not fully configured (missing user.name / user.email)."
+    echo "You can continue, but commands that rely on Git identity may prompt later."
+    if [[ "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" != "1" ]] && command -v gum >/dev/null 2>&1; then
+      if ! gum confirm --default=true "Continue configuring omarchy-syncd anyway?"; then
+        return
+      fi
+    else
+      if ! ask_yes_no "Continue configuring omarchy-syncd anyway?" true; then
+        return
+      fi
+    fi
+  fi
+
+  if [[ "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" != "1" ]] && command -v gum >/dev/null 2>&1; then
+    clear_logo || true
+    gum_panel \
+      "Ready to write your omarchy-syncd config?" \
+      "" \
+      "• Adds your repo so menus work." \
+      "• Needs git + gh (or configure details manually)."
+
+    if ! gum confirm --default=true "Create config now?"; then
+      return
     fi
   else
-    if command -v gh >/dev/null 2>&1; then
-      echo
-      echo "gh CLI detected but not authenticated. Run 'gh auth login' to enable automatic repo creation."
-    else
-      echo
-      echo "Install the GitHub CLI (gh) and authenticate if you want the installer to create the repo."
+    printf '%s\n' \
+      "Ready to write your omarchy-syncd config?" \
+      "" \
+      "• Adds your repo so menus work." \
+      "• Needs git + gh (or configure details manually)."
+    if ! ask_yes_no "Create config now?"; then
+      echo "You can rerun \"omarchy-syncd config --write ...\" later if you prefer."
+      return
     fi
   fi
 
-  transport=""
-  while [ -z "$transport" ]; do
-    read -r -p "Use HTTPS or SSH for GitHub access? [https/ssh] " transport
+  local repo_url=""
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    if ask_yes_no "Create a new private GitHub repository via gh?"; then
+      local gh_user default_repo repo_full
+      gh_user="$(gh api user -q '.login' 2>/dev/null || true)"
+      default_repo="${gh_user:+$gh_user/}omarchy-dotfiles"
+      repo_full=$(prompt_string "GitHub repository (owner/name) [$default_repo]:" "$default_repo")
+      if [[ "$repo_full" != */* && -n "$gh_user" ]]; then
+        repo_full="$gh_user/$repo_full"
+      fi
+      if gh repo view "$repo_full" >/dev/null 2>&1; then
+        repo_url="git@github.com:${repo_full}.git"
+      else
+        if gh repo create "$repo_full" --private --branch master --confirm >/dev/null 2>&1; then
+          repo_url="git@github.com:${repo_full}.git"
+        else
+          return
+        fi
+      fi
+    fi
+  else
+    repo_url=""
+  fi
+
+  local transport=""
+  while [[ -z "$transport" ]]; do
+    transport=$(prompt_string "Use HTTPS or SSH for GitHub access? [https/ssh]:" "")
     transport=${transport,,}
-    if [ "$transport" != "https" ] && [ "$transport" != "ssh" ] && [ -n "$transport" ]; then
+    if [[ "$transport" != "https" && "$transport" != "ssh" ]]; then
       echo "Please answer 'https' or 'ssh'."
       transport=""
     fi
   done
 
-  if [ -n "$repo_url" ]; then
-    if [[ "$repo_url" = git@github.com:* && "$transport" = "https" ]]; then
-      repo_url="https://github.com/${repo_full}.git"
-    elif [[ "$repo_url" = https://github.com/* && "$transport" = "ssh" ]]; then
-      repo_url="git@github.com:${repo_full}.git"
-    fi
-  fi
-
-  while [ -z "$repo_url" ]; do
-    if [ "$transport" = "https" ]; then
-      read -r -p "Enter the GitHub repo (owner/name) for HTTPS (e.g. you/omarchy-dotfiles): " repo_full
-    else
-      read -r -p "Enter the Git remote URL for SSH (e.g. git@github.com:you/omarchy-dotfiles.git): " repo_full
-    fi
-    if [ -z "$repo_full" ]; then
-      echo "A remote is required to continue."
-      continue
-    fi
-    if [ "$transport" = "https" ]; then
-      if [[ "$repo_full" != */* ]]; then
-        echo "Please provide owner/name (e.g. you/omarchy-dotfiles)."
-        continue
+  if [[ -z "$repo_url" ]]; then
+    if [[ "$transport" == "https" ]]; then
+      repo_url=$(prompt_string "Enter the GitHub repo (owner/name) for HTTPS:" "")
+      if [[ "$repo_url" != */* ]]; then
+        echo "Expected owner/name format." >&2
+        return
       fi
-      repo_url="https://github.com/${repo_full}.git"
+      repo_url="https://github.com/${repo_url}.git"
     else
-      repo_url="$repo_full"
+      repo_url=$(prompt_string "Enter the Git remote URL for SSH:" "")
     fi
-  done
-
-  read -r -p "Branch name to track [main]: " branch_name
-  branch_name=${branch_name:-main}
-
-  include_defaults_choice=false
-  ask_yes_no "Include Omarchy default path bundles?"
-  include_status=$?
-  if [ $include_status -eq 0 ]; then
-    include_defaults_choice=true
-  elif [ $include_status -eq 2 ]; then
-    echo
-    echo "Input closed unexpectedly; skipping configuration. Run 'omarchy-syncd config --write --repo-url <remote> ...' later."
-    exit 0
+  else
+    if [[ "$repo_url" = git@github.com:* && "$transport" = "https" ]]; then
+      repo_url="https://github.com/${repo_url#git@github.com:}.git"
+    elif [[ "$repo_url" = https://github.com/* && "$transport" = "ssh" ]]; then
+      repo_url="git@github.com:${repo_url#https://github.com/}"
+    fi
   fi
 
-  read -r -p "Additional paths (comma-separated, optional): " extra_paths
+  local branch_name
+  branch_name=$(prompt_string "Branch name to track [master]:" "master")
 
-  args=("$INSTALLED_BIN" "config" "--write" "--repo-url" "$repo_url" "--branch" "$branch_name")
+  local include_defaults=false
+  local manual_mode=false
+  local -a manual_bundle_ids=()
+  if [[ "${OMARCHY_SYNCD_FORCE_NO_GUM:-0}" != "1" ]] && command -v gum >/dev/null 2>&1; then
+    clear_logo || true
+    gum_panel \
+      "Include Omarchy default path bundles?" \
+      "" \
+      "• Core Desktop (Hyprland, Waybar, Omarchy theme, SwayOSD, WayVNC)" \
+      "• Terminals (Alacritty, Ghostty, Kitty)" \
+      "• CLI Tools (btop, fastfetch, eza, cava, Walker)" \
+      "• Editors (Neovim, Typora)" \
+      "• Git Tooling (git, lazygit, gh configs)" \
+      "• Creative Tools (Aether, Elephant assets)" \
+      "• System Services (user systemd units)"
 
-  if [ "$include_defaults_choice" = true ]; then
+    local bundle_action
+    bundle_action=$(gum choose --cursor "➤" --height 6 --header "↓↑ navigate • Space toggles • Enter confirms" \
+      "Include all default bundles" \
+      "Manual bundle selection" \
+      "Skip default bundles") || bundle_action="Skip default bundles"
+
+    case "$bundle_action" in
+      "Include all default bundles")
+        include_defaults=true
+        ;;
+      "Manual bundle selection")
+        manual_mode=true
+        local selection
+        selection=$(gum choose --no-limit --cursor "➤" --height 12 --header "Bundles are optional; deselect to skip tracking" "${DEFAULT_BUNDLE_LABELS[@]}") || selection=""
+        if [[ -n "$selection" ]]; then
+          manual_bundle_ids=()
+          while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            for idx in "${!DEFAULT_BUNDLE_LABELS[@]}"; do
+              if [[ "$line" == "${DEFAULT_BUNDLE_LABELS[$idx]}" ]]; then
+                manual_bundle_ids+=("${DEFAULT_BUNDLE_IDS[$idx]}")
+                break
+              fi
+            done
+          done <<<"$selection"
+        fi
+        ;;
+      *)
+        ;;
+    esac
+  else
+    printf '%s\n' \
+      "Include Omarchy default path bundles?" \
+      "" \
+      "1) Core Desktop - Hyprland, Waybar, Omarchy, SwayOSD, WayVNC" \
+      "2) Terminals - Alacritty, Ghostty, Kitty" \
+      "3) CLI Tools - btop, fastfetch, eza, cava, Walker" \
+      "4) Editors - Neovim, Typora" \
+      "5) Git Tooling - git, lazygit, gh configs" \
+      "6) Creative Tools - Aether, Elephant assets" \
+      "7) System Services - user systemd units" \
+      "" \
+      "Enter 'm' for manual selection."
+    printf "Include defaults? [Y/n/m]: "
+    local answer
+    read -r answer || answer=""
+    case "${answer,,}" in
+      ""|"y"|"yes")
+        include_defaults=true
+        ;;
+      "m"|"manual")
+        manual_mode=true
+        printf "Enter bundle numbers separated by spaces (e.g. 1 3 5): "
+        local manual_input
+        read -r manual_input
+        manual_bundle_ids=()
+        for token in $manual_input; do
+          if [[ "$token" =~ ^[0-9]+$ ]]; then
+            local idx=$((token - 1))
+            if (( idx >= 0 && idx < ${#DEFAULT_BUNDLE_IDS[@]} )); then
+              manual_bundle_ids+=("${DEFAULT_BUNDLE_IDS[$idx]}")
+            fi
+          fi
+        done
+        ;;
+      *)
+        ;;
+    esac
+  fi
+
+  local extra_paths=""
+  if [[ "$include_defaults" == true || "$manual_mode" == true ]]; then
+    extra_paths=$(prompt_string "Additional paths (comma-separated, optional):" "")
+  fi
+
+  local args=("$INSTALLED_BIN" "config" "--write" "--repo-url" "$repo_url" "--branch" "$branch_name")
+  if [[ "$include_defaults" == true ]]; then
     args+=("--include-defaults")
   fi
-
-  if [ -n "$extra_paths" ]; then
-    IFS=',' read -ra entries <<< "$extra_paths"
+  if (( ${#manual_bundle_ids[@]} > 0 )); then
+    for bundle_id in "${manual_bundle_ids[@]}"; do
+      args+=("--bundle" "$bundle_id")
+    done
+  fi
+  if [[ -n "$extra_paths" ]]; then
+    IFS=',' read -ra entries <<<"$extra_paths"
     for entry in "${entries[@]}"; do
-      trimmed="${entry#"${entry%%[![:space:]]*}"}"
-      trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
-      if [ -n "$trimmed" ]; then
-        args+=("--path" "$trimmed")
-      fi
+      entry="${entry#${entry%%[![:space:]]*}}"
+      entry="${entry%${entry##*[![:space:]]}}"
+      [[ -n "$entry" ]] && args+=("--path" "$entry")
     done
   fi
 
-  echo
-  echo "Running: ${args[*]}"
-  "${args[@]}"
-  echo "Configuration written to $CONFIG_PATH"
-
-  ask_yes_no "Run an initial backup now?"
-  backup_status=$?
-  if [ $backup_status -eq 0 ]; then
-    echo
-    echo "Running initial backup..."
-    if "$INSTALLED_BIN" backup; then
-      echo "Initial backup completed."
+  local example_note=""
+  if [[ "$include_defaults" == true || ${#manual_bundle_ids[@]} -gt 0 || -n "$extra_paths" ]]; then
+    if (( config_preexisted == 1 )); then
+      args+=("--force")
+    fi
+    if "${args[@]}"; then
+      append_example_comment
     else
-      echo "Initial backup failed. Resolve the issue above and rerun 'omarchy-syncd backup'."
+      return
     fi
-  elif [ $backup_status -eq 2 ]; then
-    echo
-    echo "Input closed unexpectedly; skipping initial backup. Run 'omarchy-syncd backup' later."
   else
-    echo
-    echo "Skipping initial backup. Run 'omarchy-syncd backup' whenever you're ready."
+    write_example_config "$repo_url" "$branch_name"
+    example_note="Example config created at $CONFIG_PATH. Edit this file to add bundles or paths."
+    example_created=1
   fi
 
-  elif [ $init_status -eq 2 ]; then
-    echo
-    echo "Input closed unexpectedly; skipping configuration. Run 'omarchy-syncd config --write --repo-url <remote> ...' later."
-    exit 0
-  else
-    echo
-    echo "Skipping configuration. Run 'omarchy-syncd config --write --repo-url <remote> ...' later to set it up."
-  fi
-fi
-
-if [ -t 0 ]; then
-  ask_yes_no "Create or update the Elephant menu entry for omarchy-syncd?"
-  menu_status=$?
-  if [ $menu_status -eq 0 ]; then
-    write_elephant_menu
-    if pgrep -x elephant >/dev/null 2>&1; then
-      echo "Elephant is running; restart it to pick up the updated menu (e.g. pkill elephant && elephant &)."
+  if (( config_preexisted == 1 )); then
+    config_updated_note="Updated existing config at $config_path."
+    if [[ -n "$backup_note" ]]; then
+      config_updated_note+=" $backup_note"
     fi
-  elif [ $menu_status -eq 2 ]; then
-    echo
-    echo "Input closed unexpectedly; skipping Elephant menu setup."
-  else
-    echo
-    echo "Skipping Elephant menu integration. You can add it later in ~/.config/elephant/menus/omarchy-syncd.toml."
   fi
+
+  export OMARCHY_SYNCD_EXAMPLE_CREATED="$example_created"
+  export OMARCHY_SYNCD_EXAMPLE_NOTE="$example_note"
+  export OMARCHY_SYNCD_CONFIG_UPDATED_NOTE="$config_updated_note"
+}
+
+# --- Post install interactions ---------------------------------------------
+
+collect_config
+
+done_lines=()
+if [[ -n "${OMARCHY_SYNCD_EXAMPLE_NOTE:-}" ]]; then
+  done_lines+=("• ${OMARCHY_SYNCD_EXAMPLE_NOTE}")
 fi
+if [[ -n "${OMARCHY_SYNCD_CONFIG_UPDATED_NOTE:-}" ]]; then
+  done_lines+=("• ${OMARCHY_SYNCD_CONFIG_UPDATED_NOTE}")
+fi
+done_lines+=("• omarchy-syncd binaries installed to $OMARCHY_SYNCD_BIN_DIR.")
+if [[ -f "$CONFIG_PATH" ]]; then
+  done_lines+=("• Configuration is at $CONFIG_PATH. Update it any time with \"omarchy-syncd config --write\".")
+else
+  done_lines+=("• No config was written. Run \"omarchy-syncd config --write\" when you're ready to set up your repo.")
+fi
+if [[ -n "${OMARCHY_SYNCD_INSTALL_LOG_FILE:-}" ]]; then
+  done_lines+=("• Install log saved to ${OMARCHY_SYNCD_INSTALL_LOG_FILE}.")
+fi
+summary_text=$(printf '%s\n' "${done_lines[@]}")
+if [[ -n "${OMARCHY_SYNCD_DONE_MESSAGE:-}" ]]; then
+  OMARCHY_SYNCD_DONE_MESSAGE+=$'\n\n'"$summary_text"
+else
+  OMARCHY_SYNCD_DONE_MESSAGE="$summary_text"
+fi
+done_summary_path="$OMARCHY_SYNCD_STATE_DIR/done-message.txt"
+mkdir -p "$(dirname "$done_summary_path")"
+printf '%s\n' "$summary_text" >"$done_summary_path"
+export OMARCHY_SYNCD_DONE_MESSAGE

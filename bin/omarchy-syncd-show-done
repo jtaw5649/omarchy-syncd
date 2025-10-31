@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+echo
+if [[ -n "${OMARCHY_SYNCD_DONE_MESSAGE:-}" ]]; then
+  printf '%s\n\n' "$OMARCHY_SYNCD_DONE_MESSAGE"
+fi
+gum spin --spinner globe --title "Done! Press any key to close..." -- bash -lc 'read -n 1 -s'

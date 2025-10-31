@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+cmd="$*"
+font_size=${OMARCHY_SYNCD_LAUNCHER_FONT_SIZE:-9}
+
+# Candidate terminal list in priority order
+candidates=()
+if [[ -n "${OMARCHY_SYNCD_LAUNCHER_TERMINAL:-}" ]]; then
+  candidates+=("$OMARCHY_SYNCD_LAUNCHER_TERMINAL")
+fi
+candidates+=(alacritty kitty ghostty)
+
+terminal=""
+for candidate in "${candidates[@]}"; do
+  [[ -z "$candidate" ]] && continue
+  if command -v "$candidate" >/dev/null 2>&1; then
+    terminal="$candidate"
+    break
+  fi
+done
+
+if [[ -z "$terminal" ]]; then
+  echo "omarchy-syncd-launcher: no supported terminal found (tried ${candidates[*]})." >&2
+  echo "Install alacritty/kitty or set OMARCHY_SYNCD_LAUNCHER_TERMINAL to a valid executable." >&2
+  exit 1
+fi
+
+launch_body="omarchy-syncd-show-logo; $cmd; omarchy-syncd-show-done"
+
+case "$terminal" in
+  alacritty)
+    exec setsid uwsm-app -- alacritty -o font.size="$font_size" --class=OmarchySyncd --title=OmarchySyncd -e bash -lc "$launch_body"
+    ;;
+  kitty)
+    exec setsid uwsm-app -- kitty --class OmarchySyncd --title OmarchySyncd -e bash -lc "$launch_body"
+    ;;
+  ghostty)
+    exec setsid uwsm-app -- ghostty -e bash -lc "$launch_body"
+    ;;
+  *)
+    exec setsid uwsm-app -- "$terminal" -e bash -lc "$launch_body"
+    ;;
+esac

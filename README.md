@@ -16,10 +16,11 @@ omarchy-syncd config [--print-path | --create | --write ...]
 **Recommended (remote installer)**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jtaw5649/omarchy-syncd/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jtaw5649/omarchy-syncd/master/install.sh \
+  | bash
 ```
 
-The installer downloads the latest prebuilt release artifact, extracts it to a temporary directory, and runs interactively. If the release download fails (or you export `OMARCHY_SYNCD_USE_SOURCE=1`), it falls back to cloning the repository and building from source. Pass any flags after `--` to forward them to the installer (for example, a custom target directory).
+You’ll get the full Gum-powered Omarchy experience: logo splash, live log tail, retry/upload prompts on failure, and a friendly summary on success. Set `OMARCHY_SYNCD_FORCE_NO_GUM=1` before running if you need a completely headless install flow. If the release download fails (or you export `OMARCHY_SYNCD_USE_SOURCE=1`), the script falls back to cloning the repository and building from source. Pass any flags after `--` to forward them to the installer (for example, a custom target directory).
 
 **Local checkout**
 
@@ -41,7 +42,7 @@ The installer requires Rust’s toolchain (`cargo`), `git`, and a POSIX shell at
 
 ### Commands
 
-- `menu` – lightweight launcher UI with entries for Install, Backup, Restore, and Edit Config. This is what the wrapper scripts expose.
+- `menu` – lightweight launcher UI with entries for Install, Backup, Restore, and Edit Config. When a newer release is detected, a Gum-styled notice appears and an **Update** entry is added so you can opt in to running `omarchy-syncd-update` straight from the menu. Pressing Enter immediately continues without updating.
 - `backup` – clones the remote repo to a temporary directory, lets you choose which of the configured paths to include, then copies them, commits, and pushes. Use `--all`, `--no-ui`, or `--path <…>` to skip the selector in scripts. If there are no changes it exits cleanly without pushing.
 - `restore` – clones the remote repo to a temporary directory, lets you pick which tracked paths to restore, and copies them back into `$HOME` (overwriting existing files/directories). Use `--all`, `--no-ui`, or `--path <…>` to bypass the selector.
 - `install` – launches the multi-select installer so you can choose bundles and extra dotfiles (also usable non-interactively with `--bundle`, `--path`, and `--dry-run`).
@@ -71,7 +72,7 @@ Missing directories are skipped during backup with a friendly message.
 ```toml
 [repo]
 url = "git@github.com:you/omarchy-dotfiles.git"
-branch = "main"
+branch = "master"
 
 [files]
 paths = [
@@ -89,6 +90,11 @@ paths = [
 - Symlink information (for example `~/.config/omarchy/current/theme`) is stored inside the backup at `.config/omarchy-syncd/symlinks.json`, and `restore` writes a copy to `~/.config/omarchy-syncd/symlinks.json` on each machine so theme links stay intact. **Do not delete this JSON file**—without it, Omarchy theme symlinks and other link-based configs cannot be reconstructed during `restore`.
 - After `restore` completes the tool runs `hyprctl reload` (if available) to pick up the updated configuration.
 - The helper script `scripts/omarchy-syncd-menu.sh` launches `omarchy-syncd menu`; wire it to Super+Alt+Space (or your preferred launcher) to mirror the Omarchy desktop workflow. The installer can generate the Elephant menu automatically, or replicate the snippet below.
+- The installer honours several environment variables:
+  - `OMARCHY_SYNCD_FORCE_NO_GUM=1` — disable Gum styling and fall back to plain prompts.
+  - `OMARCHY_SYNCD_UPDATE_COMMAND='<cmd>'` — have `omarchy-syncd-update` execute a custom command instead of `curl | bash` (useful for testing).
+  - `OMARCHY_SYNCD_ASSUME_YES=1` — auto-confirm the update prompt in non-interactive scripts.
+  - `OMARCHY_SYNCD_SKIP_UPDATE_CHECK=1` — disable the background update check shown when the menu opens.
 - **Launcher integration:**
   - *Elephant menu:* The installer offers to create/update the menu entry for you (and skips it only if you decline or run non-interactively). If you need to recreate it manually, drop the following into `~/.config/elephant/menus/omarchy-syncd.toml`:
     ```toml
