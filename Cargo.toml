@@ -22,3 +22,5 @@ ureq = { version = "2", features = ["tls"] }
 assert_cmd = "2"
 ptyprocess = "0.4"
 nix = { version = "0.27", features = ["poll"] }
+ptyprocess = "0.4"
+nix = { version = "0.27", features = ["poll"] }
