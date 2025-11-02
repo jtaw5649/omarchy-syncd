@@ -1,0 +1,36 @@
+#!/usr/bin/env expect
+
+set timeout 60
+set project_root [lindex $argv 0]
+
+spawn bash -lc "cd $project_root && ./install.sh"
+expect {
+  -re "Continue with installation\\?" {}
+}
+send "\r"
+expect {
+  -re "Add default config\\?" {}
+}
+send "n"
+send "\r"
+expect {
+  -re "Select dotfiles to configure" {}
+}
+send "\x1b" ;# ESC
+expect {
+  -re "No dotfiles selected" {}
+}
+expect {
+  -re "Install failed" {}
+}
+expect {
+  -re "Press any key to close" {}
+}
+send "\r"
+expect eof
+
+set config_path [file join $env(HOME) ".config" "omarchy-syncd" "config.toml"]
+if {[file exists $config_path]} {
+  puts stderr "config unexpectedly created at $config_path"
+  exit 1
+}

@@ -2,31 +2,20 @@
 
 set -euo pipefail
 
-wrapper_src="$OMARCHY_SYNCD_ROOT/scripts/omarchy-syncd-wrapper.sh"
-if [[ ! -f "$wrapper_src" ]]; then
-  log_error "CLI wrapper missing at $wrapper_src; cannot deploy helper shims"
-  exit 1
+runtime_bin_dir="$OMARCHY_SYNCD_RUNTIME_DIR/bin"
+if [[ ! -d "$runtime_bin_dir" ]]; then
+	log_error "helpers: runtime bin directory missing at $runtime_bin_dir"
+	exit 1
 fi
 
-helper_basenames=(
-  "omarchy-syncd-menu"
-  "omarchy-syncd-install"
-  "omarchy-syncd-backup"
-  "omarchy-syncd-restore"
-  "omarchy-syncd-config"
-  "omarchy-syncd-uninstall"
-)
-
-for helper in "${helper_basenames[@]}"; do
-  install -m 755 "$wrapper_src" "$OMARCHY_SYNCD_BIN_DIR/$helper"
-  install -m 755 "$wrapper_src" "$OMARCHY_SYNCD_BIN_DIR/${helper}.sh"
-  log_info "Installed helper wrapper $helper (and .sh shim) to $OMARCHY_SYNCD_BIN_DIR"
-done
-
-if [[ -d "$OMARCHY_SYNCD_ROOT/bin" ]]; then
-  while IFS= read -r -d '' file; do
-    target_name=$(basename "$file")
-    install -m 755 "$file" "$OMARCHY_SYNCD_BIN_DIR/$target_name"
-    log_info "Deployed packaged binary helper $target_name to $OMARCHY_SYNCD_BIN_DIR"
-  done < <(find "$OMARCHY_SYNCD_ROOT/bin" -type f -print0)
-fi
+while IFS= read -r -d '' file; do
+	target_name=$(basename "$file")
+	if [[ "$target_name" == "omarchy-syncd" ]]; then
+		continue
+	fi
+	chmod +x "$file"
+	ln -sfn "$file" "$OMARCHY_SYNCD_BIN_DIR/$target_name"
+	if declare -F log_info >/dev/null 2>&1; then
+		log_info "helpers: linked $target_name to $file"
+	fi
+done < <(find "$runtime_bin_dir" -type f -print0)

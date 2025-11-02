@@ -1,0 +1,41 @@
+#!/usr/bin/env expect
+
+set timeout 60
+set project_root [lindex $argv 0]
+
+spawn bash -lc "cd $project_root && ./install.sh"
+expect {
+  -re "Continue with installation\\?" {}
+}
+send "\r"
+expect {
+  -re "Add default config\\?" {}
+}
+send "n"
+send "\r"
+expect {
+  -re "Select dotfiles to configure" {}
+}
+send "\t"
+send "\r"
+expect {
+  -re "Saved selection" {}
+}
+expect {
+  -re "Close installer\?" {}
+}
+send "\r"
+expect eof
+
+set config_path [file join $env(HOME) ".config" "omarchy-syncd" "config.toml"]
+if {![file exists $config_path]} {
+  puts stderr "config not created at $config_path"
+  exit 1
+}
+set fh [open $config_path r]
+set config_contents [read $fh]
+close $fh
+if {[string first "~/.config/hypr" $config_contents] == -1} {
+  puts stderr "expected ~/.config/hypr path in config"
+  exit 1
+}

@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$'\n\t'
+
+resolve_root() {
+  local source="${BASH_SOURCE[0]}"
+  while [[ -h "$source" ]]; do
+    local dir
+    dir="$(cd -P -- "$(dirname -- "$source")" && pwd)"
+    source="$(readlink "$source")"
+    [[ "$source" != /* ]] && source="$dir/$source"
+  done
+  local script_dir
+  script_dir="$(cd -P -- "$(dirname -- "$source")" && pwd)"
+  cd -P -- "$script_dir/.." >/dev/null && pwd
+}
+
+ROOT_DIR="$(resolve_root)"
+export OMARCHY_SYNCD_ROOT="$ROOT_DIR"
+
+source "$ROOT_DIR/lib/core.sh"
+
+dispatch() {
+  local subcommand="$1"
+  shift || true
+  local target="$ROOT_DIR/lib/cli/${subcommand}.sh"
+  if [[ ! -x "$target" ]]; then
+    omarchy_syncd_die "unknown subcommand '${subcommand}'"
+  fi
+  OMARCHY_SYNCD_INVOCATION="$subcommand" exec "$target" "$@"
+}
+
+main() {
+  local invoked
+  invoked="$(basename -- "$0")"
+
+  case "$invoked" in
+    omarchy-syncd)
+      if [[ $# -eq 0 ]]; then
+        dispatch "menu"
+      else
+        local sub="$1"
+        shift
+        case "$sub" in
+          backup|restore|install|config|menu|uninstall)
+            dispatch "$sub" "$@"
+            ;;
+          --help|-h)
+            cat <<'USAGE'
+Usage: omarchy-syncd <command> [options]
+
+Commands:
+  backup      Snapshot configured paths and push to remote.
+  restore     Restore tracked paths from remote repo.
+  install     Configure bundles and paths on this machine.
+  config      Inspect or edit configuration files.
+  menu        Launch the interactive menu UI.
+  uninstall   Remove omarchy-syncd assets.
+
+Run 'omarchy-syncd <command> --help' for command-specific options.
+USAGE
+            ;;
+          *)
+            omarchy_syncd_die "unknown command '$sub'"
+            ;;
+        esac
+      fi
+      ;;
+    omarchy-syncd-backup) dispatch "backup" "$@" ;;
+    omarchy-syncd-restore) dispatch "restore" "$@" ;;
+    omarchy-syncd-install) dispatch "install" "$@" ;;
+    omarchy-syncd-config) dispatch "config" "$@" ;;
+    omarchy-syncd-menu) dispatch "menu" "$@" ;;
+    omarchy-syncd-uninstall) dispatch "uninstall" "$@" ;;
+    *)
+      omarchy_syncd_die "unexpected binary name '$invoked'"
+      ;;
+  esac
+}
+
+main "$@"

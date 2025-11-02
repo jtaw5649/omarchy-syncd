@@ -1,7 +1,48 @@
 #!/usr/bin/env bash
 
+summary="${OMARCHY_SYNCD_SELECTION_SUMMARY:-}" 
+config_path="${OMARCHY_SYNCD_CONFIG_PATH:-}" 
+log_path="${OMARCHY_SYNCD_INSTALL_LOG_FILE:-}" 
+
+logo_path="${OMARCHY_SYNCD_LOGO_PATH:-$HOME/.local/share/omarchy-syncd/logo.txt}"
+
 echo
-if [[ -n "${OMARCHY_SYNCD_DONE_MESSAGE:-}" ]]; then
-  printf '%s\n\n' "$OMARCHY_SYNCD_DONE_MESSAGE"
+
+if [[ -t 1 && -f "$logo_path" ]]; then
+  printf '\033[32m'
+  cat "$logo_path"
+  printf '\033[0m\n\n'
 fi
-gum spin --spinner globe --title "Done! Press any key to close..." -- bash -lc 'read -n 1 -s'
+
+if command -v gum >/dev/null 2>&1 && [[ -t 0 && -t 1 ]]; then
+  box_lines=("Configuration Saved!" "")
+  if [[ -n "$summary" ]]; then
+    while IFS= read -r line; do
+      box_lines+=("$line")
+    done <<<"$summary"
+    box_lines+=("")
+  fi
+  if [[ -n "$log_path" ]]; then
+    box_lines+=("Installation log: $log_path" "")
+  fi
+  box_lines+=("Next Steps" "• Edit config: $config_path" "• Run 'omarchy-syncd menu' or open Omarchy Sync with Walker")
+
+  gum style --border normal --border-foreground 6 --padding "1 2" --margin "1 0" "${box_lines[@]}"
+
+  while :; do
+    if gum confirm --default=true "Close installer?"; then
+      break
+    fi
+  done
+else
+  if [[ -n "$summary" ]]; then
+    printf 'Configuration Saved\n\n%s\n\n' "$summary"
+  fi
+  if [[ -n "$log_path" ]]; then
+    printf 'Installation log: %s\n\n' "$log_path"
+  fi
+  printf 'Next Steps\n'
+  printf ' • Edit config: %s\n' "$config_path"
+  printf " • Run 'omarchy-syncd menu' Run 'omarchy-syncd menu' or open Omarchy Sync with Walker\n\n"
+  read -r -p "Press Enter to close..." _
+fi

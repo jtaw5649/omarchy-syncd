@@ -2,10 +2,13 @@
 
 set -euo pipefail
 
-if [[ ! -f "$OMARCHY_SYNCD_BIN_SOURCE" ]]; then
-  echo "error: build artifact missing at $OMARCHY_SYNCD_BIN_SOURCE" >&2
-  exit 1
+runtime_bin="$OMARCHY_SYNCD_RUNTIME_DIR/bin/omarchy-syncd"
+if [[ ! -x "$runtime_bin" ]]; then
+	log_error "binary: runtime dispatcher missing at $runtime_bin"
+	exit 1
 fi
 
-install -m 755 "$OMARCHY_SYNCD_BIN_SOURCE" "$OMARCHY_SYNCD_BIN_DIR/omarchy-syncd"
-log_info "Installed omarchy-syncd binary from $OMARCHY_SYNCD_BIN_SOURCE to $OMARCHY_SYNCD_BIN_DIR/omarchy-syncd"
+ln -sfn "$runtime_bin" "$OMARCHY_SYNCD_BIN_DIR/omarchy-syncd"
+if declare -F log_info >/dev/null 2>&1; then
+	log_info "binary: linked omarchy-syncd to $runtime_bin"
+fi

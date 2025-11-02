@@ -1,0 +1,31 @@
+#!/usr/bin/env expect
+
+set timeout 60
+set project_root [lindex $argv 0]
+
+spawn bash -lc "cd $project_root && OMARCHY_SYNCD_PLACEHOLDER_REPO='' ./install.sh"
+expect {
+  -re "Continue with installation\\?" {}
+}
+send "\r"
+expect {
+  -re "Add default config\\?" {}
+}
+send "\r"
+expect {
+  -re "Existing configuration missing" {}
+}
+expect {
+  -re "Install failed" {}
+}
+expect {
+  -re "Press any key to close" {}
+}
+send "\r"
+expect eof
+
+set config_path [file join $env(HOME) ".config" "omarchy-syncd" "config.toml"]
+if {[file exists $config_path]} {
+  puts stderr "config unexpectedly created at $config_path"
+  exit 1
+}

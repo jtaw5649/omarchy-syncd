@@ -9,52 +9,38 @@ permissions:
   contents: write
 
 jobs:
-  build-release:
+  release:
     runs-on: ubuntu-latest
-    env:
-      TARGET: x86_64-unknown-linux-gnu
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: stable
-          targets: ${{ env.TARGET }}
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck shfmt bats
+
+      - name: Lint
+        run: scripts/lint.sh
 
       - name: Run tests
-        run: cargo test --locked
+        run: scripts/run-tests.sh
 
-      - name: Build omarchy-syncd (${{ env.TARGET }})
-        run: cargo build --release --locked --target "$TARGET"
+      - name: Smoke test
+        run: scripts/smoke-test.sh
 
-      - name: Stage release package
+      - name: Set release version
+        id: meta
         run: |
-          rm -rf dist
-          mkdir -p dist/package/scripts dist/package/install dist/package/bin
-          cp "target/$TARGET/release/omarchy-syncd" dist/package/
-          cp install.sh README.md dist/package/
-          cp version dist/package/
-          cp icon.png dist/package/ || true
-          cp logo.txt dist/package/ || true
-          cp -a scripts/. dist/package/scripts/
-          cp -a install/. dist/package/install/
-          if [ -d bin ]; then
-            cp -a bin/. dist/package/bin/
-          fi
-          chmod +x dist/package/install.sh dist/package/omarchy-syncd dist/package/scripts/* dist/package/bin/* || true
+          version="${GITHUB_REF_NAME#v}"
+          echo "$version" > version
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Create archive
-        id: package
-        run: |
-          tarball="dist/omarchy-syncd-${TARGET}.tar.gz"
-          tar -czf "$tarball" -C dist/package .
-          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+      - name: Build release artifacts
+        run: scripts/build-release.sh
 
-      - name: Publish release asset
+      - name: Upload release tarball
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.package.outputs.tarball }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: dist/omarchy-syncd-${{ steps.meta.outputs.version }}.tar.gz
+          fail_on_unmatched_files: true
